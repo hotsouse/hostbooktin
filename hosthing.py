@@ -1,6 +1,20 @@
 import os
 import psycopg2
 from telebot import TeleBot, types
+from flask import Flask
+from threading import Thread
+
+# Создаем Flask приложение
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running"
+
+def run_flask():
+    # Получаем порт из переменной окружения или используем 8080
+    port = int(os.getenv('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
 
 # Получаем токен из переменных окружения
 TOKEN = os.getenv('TOKEN', '7194447722:AAFB6uobHo_NogxPkJpmQbtmweLBPJbLqxA')
@@ -258,5 +272,13 @@ def users_message(message):
     else:
         bot.send_message(message.chat.id, "У вас нет прав для доступа к этому меню.")
 
-# Запуск бота
-bot.polling(none_stop=True)
+# Изменяем запуск бота
+def run_bot():
+    bot.infinity_polling()
+
+if __name__ == "__main__":
+    # Запускаем Flask в отдельном потоке
+    server_thread = Thread(target=run_flask)
+    server_thread.start()
+    # Запускаем бота
+    run_bot()
