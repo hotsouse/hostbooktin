@@ -169,6 +169,10 @@ def register_user(message):
 
 # Обработка добавления книг после регистрации
 def add_books(message):
+    if not message.text:
+        bot.send_message(message.chat.id, "Пожалуйста, отправьте текстовое сообщение.")
+        return
+
     books = message.text
     user_id = message.from_user.id
     with conn.cursor() as cursor:
@@ -182,6 +186,7 @@ def add_books(message):
             bot.send_message(message.chat.id, "Ваши книги успешно добавлены!")
         else:
             bot.send_message(message.chat.id, "Ошибка! Вы не зарегистрированы.")
+    clear_user_state(user_id)
 
 # Функция: показать все доступные книги
 @bot.message_handler(func=lambda message: message.text == "Доступные книги")
@@ -199,22 +204,27 @@ def available_books(message):
 # Обработка нажатия на кнопку "Search"
 @bot.message_handler(func=lambda message: message.text == "Search")
 def search_message(message):
+    set_user_state(message.from_user.id, "searching")
     bot.send_message(message.chat.id, "Введите название книги для поиска.")
-    bot.register_next_step_handler(message, search_books)
 
 def search_books(message):
+    if not message.text:
+        bot.send_message(message.chat.id, "Пожалуйста, отправьте текстовое сообщение.")
+        return
+
     book_name = message.text.lower()
     with conn.cursor() as cursor:
         cursor.execute('SELECT full_name, username, books FROM users')
         results = []
         for row in cursor.fetchall():
             full_name, username, books = row
-            if book_name in books.lower():
+            if books and book_name in books.lower():
                 results.append(f"{full_name} (@{username}): {books}")
     if results:
         bot.send_message(message.chat.id, "\n".join(results))
     else:
         bot.send_message(message.chat.id, "Книга не найдена.")
+    clear_user_state(message.from_user.id)
 
 # Обработка нажатия на кнопку "FAQ"
 @bot.message_handler(func=lambda message: message.text == "FAQ")
