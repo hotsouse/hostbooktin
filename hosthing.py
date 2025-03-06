@@ -5,6 +5,7 @@ from flask import Flask
 from threading import Thread
 import signal
 import sys
+import time
 
 # Создаем Flask приложение
 app = Flask(__name__)
@@ -17,9 +18,11 @@ def home():
     return "Bot is running"
 
 def signal_handler(signum, frame):
-    global is_running
+    global is_running, bot
     print("Получен сигнал остановки, завершаем работу...")
     is_running = False
+    if bot:
+        bot.stop_polling()
     sys.exit(0)
 
 # Регистрируем обработчик сигналов
@@ -27,22 +30,39 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 def run_flask():
-    # Получаем порт из переменной окружения или используем 8080
     port = int(os.getenv('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
-# Получаем токен из переменных окружения
-TOKEN = os.getenv('TOKEN', '7194447722:AAFB6uobHo_NogxPkJpmQbtmweLBPJbLqxA')
-bot = TeleBot(TOKEN)
-
-# Получаем URL базы данных из переменных окружения
-DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://booktinder_user:VURw5VmEpLegLgBOUq20z0ItiuxesLWU@dpg-cup3bil2ng1s73eeoms0-a.singapore-postgres.render.com/booktinder')
-
-try:
-    conn = psycopg2.connect(DATABASE_URL, sslmode='require')
-except Exception as e:
-    print(f"Ошибка подключения к базе данных: {e}")
+# Инициализация бота с настройками
+TOKEN = os.getenv('TOKEN')
+if not TOKEN:
+    print("Ошибка: TOKEN не установлен")
     sys.exit(1)
+
+bot = TeleBot(TOKEN)
+bot.remove_webhook()  # Удаляем старый вебхук, если он был
+time.sleep(1)  # Ждем секунду для очистки
+
+# База данных
+DATABASE_URL = os.getenv('DATABASE_URL')
+if not DATABASE_URL:
+    print("Ошибка: DATABASE_URL не установлен")
+    sys.exit(1)
+
+# Подключение к базе данных с повторными попытками
+max_retries = 3
+retry_delay = 5
+
+for attempt in range(max_retries):
+    try:
+        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+        break
+    except Exception as e:
+        if attempt == max_retries - 1:
+            print(f"Не удалось подключиться к базе данных после {max_retries} попыток: {e}")
+            sys.exit(1)
+        print(f"Попытка {attempt + 1} подключения к БД не удалась, повторная попытка через {retry_delay} секунд...")
+        time.sleep(retry_delay)
 
 # Создание таблицы пользователей
 with conn:
@@ -304,14 +324,18 @@ def users_message(message):
 
 # Изменяем запуск бота
 def run_bot():
+    global is_running
     while is_running:
         try:
+            print("Запуск бота...")
             bot.infinity_polling(timeout=60, long_polling_timeout=60)
         except Exception as e:
             print(f"Ошибка в работе бота: {e}")
             if "Conflict: terminated by other getUpdates request" in str(e):
                 print("Обнаружен конфликт с другим экземпляром бота")
-                sys.exit(1)
+                time.sleep(10)  # Ждем 10 секунд перед повторной попыткой
+            else:
+                time.sleep(5)  # Ждем 5 секунд перед повторной попыткой для других ошибок
             continue
 
 if __name__ == "__main__":
@@ -322,6 +346,14 @@ if __name__ == "__main__":
         
         # Запускаем бота
         run_bot()
+    except KeyboardInterrupt:
+        print("Получен сигнал прерывания, завершаем работу...")
+        is_running = False
+        if bot:
+            bot.stop_polling()
     except Exception as e:
         print(f"Критическая ошибка: {e}")
+        is_running = False
+        if bot:
+            bot.stop_polling()
         sys.exit(1)
