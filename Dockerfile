@@ -7,4 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Добавляем обработку сигналов остановки
+STOPSIGNAL SIGTERM
+
 CMD ["python", "hosthing.py"] 
