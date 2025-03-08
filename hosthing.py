@@ -9,8 +9,27 @@ import time
 import atexit
 import fcntl
 
+# Инициализация переменных окружения
+TOKEN = os.getenv('TOKEN')
+if not TOKEN:
+    print("Ошибка: TOKEN не установлен")
+    sys.exit(1)
+
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')
+if not WEBHOOK_URL:
+    print("Ошибка: WEBHOOK_URL не установлен")
+    sys.exit(1)
+
+DATABASE_URL = os.getenv('DATABASE_URL')
+if not DATABASE_URL:
+    print("Ошибка: DATABASE_URL не установлен")
+    sys.exit(1)
+
 # Создаем Flask приложение
 app = Flask(__name__)
+
+# Инициализация бота
+bot = TeleBot(TOKEN)
 
 # Флаг для контроля работы бота
 is_running = True
@@ -87,31 +106,12 @@ def setup_webhook():
         bot.remove_webhook()
         time.sleep(1)
         # Устанавливаем новый вебхук
-        bot.set_webhook(url=WEBHOOK_URL + '/' + TOKEN)
-        print("Вебхук успешно установлен")
+        webhook_url = f"{WEBHOOK_URL}/{TOKEN}"
+        bot.set_webhook(url=webhook_url)
+        print(f"Вебхук успешно установлен на {webhook_url}")
     except Exception as e:
         print(f"Ошибка при установке вебхука: {e}")
         sys.exit(1)
-
-# Инициализация бота
-TOKEN = os.getenv('TOKEN')
-if not TOKEN:
-    print("Ошибка: TOKEN не установлен")
-    sys.exit(1)
-
-bot = TeleBot(TOKEN)
-
-# Получаем URL для вебхука из переменной окружения
-WEBHOOK_URL = os.getenv('WEBHOOK_URL')
-if not WEBHOOK_URL:
-    print("Ошибка: WEBHOOK_URL не установлен")
-    sys.exit(1)
-
-# База данных
-DATABASE_URL = os.getenv('DATABASE_URL')
-if not DATABASE_URL:
-    print("Ошибка: DATABASE_URL не установлен")
-    sys.exit(1)
 
 # Подключение к базе данных с повторными попытками
 max_retries = 3
@@ -435,7 +435,7 @@ if __name__ == "__main__":
         
         # Запускаем Flask
         port = int(os.getenv('PORT', 10000))
-        app.run(host='0.0.0.0', port=port)
+        app.run(host='0.0.0.0', port=port, threaded=True)
     except KeyboardInterrupt:
         print("Получен сигнал прерывания, завершаем работу...")
         bot.remove_webhook()
