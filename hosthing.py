@@ -1,8 +1,8 @@
 import os
 import psycopg2
 from telebot import TeleBot, types
-from flask import Flask
-from threading import Thread, Lock
+from flask import Flask, request
+from threading import Lock
 import signal
 import sys
 import time
@@ -71,19 +71,41 @@ signal.signal(signal.SIGTERM, signal_handler)
 def home():
     return "Bot is running"
 
-def run_flask():
-    port = int(os.getenv('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+# Обработчик вебхука
+@app.route('/' + TOKEN, methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return ''
+    return 'OK'
 
-# Инициализация бота с настройками
+def setup_webhook():
+    try:
+        # Удаляем старый вебхук
+        bot.remove_webhook()
+        time.sleep(1)
+        # Устанавливаем новый вебхук
+        bot.set_webhook(url=WEBHOOK_URL + '/' + TOKEN)
+        print("Вебхук успешно установлен")
+    except Exception as e:
+        print(f"Ошибка при установке вебхука: {e}")
+        sys.exit(1)
+
+# Инициализация бота
 TOKEN = os.getenv('TOKEN')
 if not TOKEN:
     print("Ошибка: TOKEN не установлен")
     sys.exit(1)
 
 bot = TeleBot(TOKEN)
-bot.remove_webhook()  # Удаляем старый вебхук, если он был
-time.sleep(1)  # Ждем секунду для очистки
+
+# Получаем URL для вебхука из переменной окружения
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')
+if not WEBHOOK_URL:
+    print("Ошибка: WEBHOOK_URL не установлен")
+    sys.exit(1)
 
 # База данных
 DATABASE_URL = os.getenv('DATABASE_URL')
@@ -403,41 +425,23 @@ def get_db_connection():
         time.sleep(5)  # Ждем перед повторной попыткой
         return get_db_connection()
 
-# Изменяем запуск бота
-def run_bot():
-    """Запуск бота с обработкой ошибок"""
-    global is_running
-    while is_running:
-        try:
-            print("Запуск бота...")
-            # Очищаем обновления перед запуском
-            bot.get_updates(offset=-1)
-            bot.infinity_polling(timeout=60, long_polling_timeout=60)
-        except Exception as e:
-            print(f"Ошибка в работе бота: {e}")
-            if "Conflict: terminated by other getUpdates request" in str(e):
-                print("Обнаружен конфликт с другим экземпляром бота")
-                cleanup()
-                sys.exit(1)
-            else:
-                time.sleep(5)
-            continue
-
 if __name__ == "__main__":
     try:
         # Получаем блокировку процесса
         lock_file = acquire_lock()
 
-        # Запускаем Flask в отдельном потоке
-        server_thread = Thread(target=run_flask, daemon=True)
-        server_thread.start()
+        # Устанавливаем вебхук
+        setup_webhook()
         
-        # Запускаем бота
-        run_bot()
+        # Запускаем Flask
+        port = int(os.getenv('PORT', 10000))
+        app.run(host='0.0.0.0', port=port)
     except KeyboardInterrupt:
         print("Получен сигнал прерывания, завершаем работу...")
+        bot.remove_webhook()
         cleanup()
     except Exception as e:
         print(f"Критическая ошибка: {e}")
+        bot.remove_webhook()
         cleanup()
         sys.exit(1)
