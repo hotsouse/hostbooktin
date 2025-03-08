@@ -2,7 +2,7 @@ import os
 import psycopg2
 from telebot import TeleBot, types
 from flask import Flask
-from threading import Thread
+from threading import Thread, Lock
 import signal
 import sys
 import time
@@ -12,6 +12,9 @@ app = Flask(__name__)
 
 # Флаг для контроля работы бота
 is_running = True
+
+# Добавляем блокировку для безопасного доступа к соединению
+db_lock = Lock()
 
 @app.route('/')
 def home():
@@ -173,14 +176,19 @@ def start(message):
 @bot.message_handler(func=lambda message: message.text == "Старт")
 def handle_start_button(message):
     user_id = message.from_user.id
-    with conn.cursor() as cursor:
-        cursor.execute('UPDATE users SET started = TRUE WHERE user_id = %s', (user_id,))
-        conn.commit()
-    bot.send_message(
-        message.chat.id,
-        "Добро пожаловать! Выберите 'Зарегистрироваться', чтобы начать обмен книгами.",
-        reply_markup=main_menu(),
-    )
+    try:
+        connection = get_db_connection()
+        with connection.cursor() as cursor:
+            cursor.execute('UPDATE users SET started = TRUE WHERE user_id = %s', (user_id,))
+            connection.commit()
+        bot.send_message(
+            message.chat.id,
+            "Добро пожаловать! Выберите 'Зарегистрироваться', чтобы начать обмен книгами.",
+            reply_markup=main_menu(),
+        )
+    except Exception as e:
+        print(f"Ошибка в handle_start_button: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка. Пожалуйста, попробуйте позже.")
 
 # Обработка нажатия на кнопку "Зарегистрироваться"
 @bot.message_handler(func=lambda message: message.text == "Зарегистрироваться")
@@ -193,19 +201,23 @@ def register_user(message):
     user_id = message.from_user.id
     username = message.from_user.username
 
-    with conn.cursor() as cursor:
-        cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
-        if cursor.fetchone():
-            bot.send_message(message.chat.id, "Регистрация завершена! Теперь можете добавить свои книги для обмена нажимая 'Добавить книги'. ")
-        else:
-            cursor.execute('INSERT INTO users (user_id, username, full_name, books) VALUES (%s, %s, %s, %s)',
-                           (user_id, username, full_name, ""))
-            conn.commit()
-            bot.send_message(
-                message.chat.id,
-                "Регистрация завершена! Теперь отправьте список книг, которые вы хотите обменять."
-            )
-            bot.register_next_step_handler(message, add_books)
+    try:
+        connection = get_db_connection()
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
+            if cursor.fetchone():
+                bot.send_message(message.chat.id, "Регистрация завершена! Теперь можете добавить свои книги для обмена нажимая 'Добавить книги'.")
+            else:
+                cursor.execute('INSERT INTO users (user_id, username, full_name, books) VALUES (%s, %s, %s, %s)',
+                             (user_id, username, full_name, ""))
+                connection.commit()
+                bot.send_message(
+                    message.chat.id,
+                    "Регистрация завершена! Теперь отправьте список книг, которые вы хотите обменять."
+                )
+    except Exception as e:
+        print(f"Ошибка в register_user: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при регистрации. Пожалуйста, попробуйте позже.")
 
 # Обработка добавления книг после регистрации
 def add_books(message):
@@ -215,17 +227,22 @@ def add_books(message):
 
     books = message.text
     user_id = message.from_user.id
-    with conn.cursor() as cursor:
-        cursor.execute('SELECT books FROM users WHERE user_id = %s', (user_id,))
-        result = cursor.fetchone()
-        if result:
-            current_books = result[0] or ""
-            updated_books = current_books + (", " if current_books else "") + books
-            cursor.execute('UPDATE users SET books = %s WHERE user_id = %s', (updated_books, user_id))
-            conn.commit()
-            bot.send_message(message.chat.id, "Ваши книги успешно добавлены!")
-        else:
-            bot.send_message(message.chat.id, "Ошибка! Вы не зарегистрированы.")
+    try:
+        connection = get_db_connection()
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT books FROM users WHERE user_id = %s', (user_id,))
+            result = cursor.fetchone()
+            if result:
+                current_books = result[0] or ""
+                updated_books = current_books + (", " if current_books else "") + books
+                cursor.execute('UPDATE users SET books = %s WHERE user_id = %s', (updated_books, user_id))
+                connection.commit()
+                bot.send_message(message.chat.id, "Ваши книги успешно добавлены!")
+            else:
+                bot.send_message(message.chat.id, "Ошибка! Вы не зарегистрированы.")
+    except Exception as e:
+        print(f"Ошибка в add_books: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при добавлении книг. Пожалуйста, попробуйте позже.")
     clear_user_state(user_id)
 
 # Функция: показать все доступные книги
@@ -321,6 +338,27 @@ def users_message(message):
                 bot.send_message(message.chat.id, "Нет пользователей.")
     else:
         bot.send_message(message.chat.id, "У вас нет прав для доступа к этому меню.")
+
+# Добавляем функцию для получения соединения с базой данных
+def get_db_connection():
+    global conn
+    try:
+        # Проверяем соединение
+        with db_lock:
+            if conn is None or conn.closed:
+                conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+            else:
+                # Проверяем работоспособность соединения
+                try:
+                    with conn.cursor() as cursor:
+                        cursor.execute('SELECT 1')
+                except psycopg2.Error:
+                    conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+            return conn
+    except Exception as e:
+        print(f"Ошибка подключения к базе данных: {e}")
+        time.sleep(5)  # Ждем перед повторной попыткой
+        return get_db_connection()
 
 # Изменяем запуск бота
 def run_bot():
