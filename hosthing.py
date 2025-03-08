@@ -97,7 +97,7 @@ def clear_user_state(user_id):
 
 # Главное меню
 def main_menu():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add(
         types.KeyboardButton("Старт"),
         types.KeyboardButton("Зарегистрироваться"),
@@ -106,7 +106,7 @@ def main_menu():
         types.KeyboardButton("Search"),
         types.KeyboardButton("FAQ"),
         types.KeyboardButton("Мои книги"),
-        types.KeyboardButton("Users")  # Добавлена кнопка "Users"
+        types.KeyboardButton("Users")
     )
     return markup
 
@@ -124,15 +124,15 @@ def handle_messages(message):
     if message.text in MENU_COMMANDS:
         if message.text == "Search":
             set_user_state(user_id, "searching")
-            bot.send_message(message.chat.id, "Введите название книги для поиска.")
+            bot.send_message(message.chat.id, "Введите название книги для поиска.", reply_markup=main_menu())
             return
         elif message.text == "Добавить книги":
             set_user_state(user_id, "adding_books")
-            bot.send_message(message.chat.id, "Отправьте список книг через запятую.")
+            bot.send_message(message.chat.id, "Отправьте список книг через запятую.", reply_markup=main_menu())
             return
         elif message.text == "Зарегистрироваться":
             set_user_state(user_id, "registering")
-            bot.send_message(message.chat.id, "Пожалуйста, напишите свое полное имя для регистрации.")
+            bot.send_message(message.chat.id, "Пожалуйста, напишите свое полное имя для регистрации.", reply_markup=main_menu())
             return
         elif message.text == "Старт":
             handle_start_button(message)
@@ -153,13 +153,10 @@ def handle_messages(message):
     # Обработка сообщений в зависимости от состояния пользователя
     if current_state == "searching":
         search_books(message)
-        clear_user_state(user_id)
     elif current_state == "adding_books":
         add_books(message)
-        clear_user_state(user_id)
     elif current_state == "registering":
         register_user(message)
-        clear_user_state(user_id)
     else:
         bot.send_message(message.chat.id, "Пожалуйста, выберите действие из меню.", reply_markup=main_menu())
 
@@ -193,7 +190,7 @@ def handle_start_button(message):
 # Обработка нажатия на кнопку "Зарегистрироваться"
 @bot.message_handler(func=lambda message: message.text == "Зарегистрироваться")
 def register_message(message):
-    bot.send_message(message.chat.id, "Пожалуйста, напишите свое полное имя для регистрации.")
+    bot.send_message(message.chat.id, "Пожалуйста, напишите свое полное имя для регистрации.", reply_markup=main_menu())
     bot.register_next_step_handler(message, register_user)
 
 def register_user(message):
@@ -206,23 +203,25 @@ def register_user(message):
         with connection.cursor() as cursor:
             cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
             if cursor.fetchone():
-                bot.send_message(message.chat.id, "Регистрация завершена! Теперь можете добавить свои книги для обмена нажимая 'Добавить книги'.")
+                bot.send_message(message.chat.id, "Регистрация завершена! Теперь можете добавить свои книги для обмена нажимая 'Добавить книги'.", reply_markup=main_menu())
             else:
                 cursor.execute('INSERT INTO users (user_id, username, full_name, books) VALUES (%s, %s, %s, %s)',
                              (user_id, username, full_name, ""))
                 connection.commit()
                 bot.send_message(
                     message.chat.id,
-                    "Регистрация завершена! Теперь отправьте список книг, которые вы хотите обменять."
+                    "Регистрация завершена! Теперь отправьте список книг, которые вы хотите обменять.",
+                    reply_markup=main_menu()
                 )
     except Exception as e:
         print(f"Ошибка в register_user: {e}")
-        bot.send_message(message.chat.id, "Произошла ошибка при регистрации. Пожалуйста, попробуйте позже.")
+        bot.send_message(message.chat.id, "Произошла ошибка при регистрации. Пожалуйста, попробуйте позже.", reply_markup=main_menu())
+    clear_user_state(user_id)
 
 # Обработка добавления книг после регистрации
 def add_books(message):
     if not message.text:
-        bot.send_message(message.chat.id, "Пожалуйста, отправьте текстовое сообщение.")
+        bot.send_message(message.chat.id, "Пожалуйста, отправьте текстовое сообщение.", reply_markup=main_menu())
         return
 
     books = message.text
@@ -237,12 +236,12 @@ def add_books(message):
                 updated_books = current_books + (", " if current_books else "") + books
                 cursor.execute('UPDATE users SET books = %s WHERE user_id = %s', (updated_books, user_id))
                 connection.commit()
-                bot.send_message(message.chat.id, "Ваши книги успешно добавлены!")
+                bot.send_message(message.chat.id, "Ваши книги успешно добавлены!", reply_markup=main_menu())
             else:
-                bot.send_message(message.chat.id, "Ошибка! Вы не зарегистрированы.")
+                bot.send_message(message.chat.id, "Ошибка! Вы не зарегистрированы.", reply_markup=main_menu())
     except Exception as e:
         print(f"Ошибка в add_books: {e}")
-        bot.send_message(message.chat.id, "Произошла ошибка при добавлении книг. Пожалуйста, попробуйте позже.")
+        bot.send_message(message.chat.id, "Произошла ошибка при добавлении книг. Пожалуйста, попробуйте позже.", reply_markup=main_menu())
     clear_user_state(user_id)
 
 # Функция: показать все доступные книги
@@ -262,25 +261,30 @@ def available_books(message):
 @bot.message_handler(func=lambda message: message.text == "Search")
 def search_message(message):
     set_user_state(message.from_user.id, "searching")
-    bot.send_message(message.chat.id, "Введите название книги для поиска.")
+    bot.send_message(message.chat.id, "Введите название книги для поиска.", reply_markup=main_menu())
 
 def search_books(message):
     if not message.text:
-        bot.send_message(message.chat.id, "Пожалуйста, отправьте текстовое сообщение.")
+        bot.send_message(message.chat.id, "Пожалуйста, отправьте текстовое сообщение.", reply_markup=main_menu())
         return
 
     book_name = message.text.lower()
-    with conn.cursor() as cursor:
-        cursor.execute('SELECT full_name, username, books FROM users')
-        results = []
-        for row in cursor.fetchall():
-            full_name, username, books = row
-            if books and book_name in books.lower():
-                results.append(f"{full_name} (@{username}): {books}")
-    if results:
-        bot.send_message(message.chat.id, "\n".join(results))
-    else:
-        bot.send_message(message.chat.id, "Книга не найдена.")
+    try:
+        connection = get_db_connection()
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT full_name, username, books FROM users')
+            results = []
+            for row in cursor.fetchall():
+                full_name, username, books = row
+                if books and book_name in books.lower():
+                    results.append(f"{full_name} (@{username}): {books}")
+        if results:
+            bot.send_message(message.chat.id, "\n".join(results), reply_markup=main_menu())
+        else:
+            bot.send_message(message.chat.id, "Книга не найдена.", reply_markup=main_menu())
+    except Exception as e:
+        print(f"Ошибка в search_books: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при поиске. Пожалуйста, попробуйте позже.", reply_markup=main_menu())
     clear_user_state(message.from_user.id)
 
 # Обработка нажатия на кнопку "FAQ"
