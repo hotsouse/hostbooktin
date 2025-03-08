@@ -6,6 +6,8 @@ from threading import Thread, Lock
 import signal
 import sys
 import time
+import atexit
+import fcntl
 
 # Создаем Flask приложение
 app = Flask(__name__)
@@ -16,21 +18,58 @@ is_running = True
 # Добавляем блокировку для безопасного доступа к соединению
 db_lock = Lock()
 
+# Добавляем файл блокировки
+LOCK_FILE = "/tmp/telegram_bot.lock"
+
+def acquire_lock():
+    """Получить блокировку процесса"""
+    try:
+        # Открываем или создаем файл блокировки
+        lock_file = open(LOCK_FILE, 'w')
+        # Пытаемся получить эксклюзивную блокировку
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return lock_file
+    except IOError:
+        # Если не удалось получить блокировку, значит бот уже запущен
+        print("Бот уже запущен в другом процессе")
+        sys.exit(1)
+
+def release_lock(lock_file):
+    """Освободить блокировку процесса"""
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_UN)
+        lock_file.close()
+        os.remove(LOCK_FILE)
+    except:
+        pass
+
+def cleanup():
+    """Функция очистки при завершении"""
+    global is_running, bot, lock_file
+    print("Выполняется очистка...")
+    is_running = False
+    if bot:
+        try:
+            bot.stop_polling()
+        except:
+            pass
+    release_lock(lock_file)
+
+# Регистрируем функцию очистки
+atexit.register(cleanup)
+
+def signal_handler(signum, frame):
+    """Обработчик сигналов"""
+    cleanup()
+    sys.exit(0)
+
+# Регистрируем обработчики сигналов
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
 @app.route('/')
 def home():
     return "Bot is running"
-
-def signal_handler(signum, frame):
-    global is_running, bot
-    print("Получен сигнал остановки, завершаем работу...")
-    is_running = False
-    if bot:
-        bot.stop_polling()
-    sys.exit(0)
-
-# Регистрируем обработчик сигналов
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
 
 def run_flask():
     port = int(os.getenv('PORT', 8080))
@@ -366,22 +405,29 @@ def get_db_connection():
 
 # Изменяем запуск бота
 def run_bot():
+    """Запуск бота с обработкой ошибок"""
     global is_running
     while is_running:
         try:
             print("Запуск бота...")
+            # Очищаем обновления перед запуском
+            bot.get_updates(offset=-1)
             bot.infinity_polling(timeout=60, long_polling_timeout=60)
         except Exception as e:
             print(f"Ошибка в работе бота: {e}")
             if "Conflict: terminated by other getUpdates request" in str(e):
                 print("Обнаружен конфликт с другим экземпляром бота")
-                time.sleep(10)  # Ждем 10 секунд перед повторной попыткой
+                cleanup()
+                sys.exit(1)
             else:
-                time.sleep(5)  # Ждем 5 секунд перед повторной попыткой для других ошибок
+                time.sleep(5)
             continue
 
 if __name__ == "__main__":
     try:
+        # Получаем блокировку процесса
+        lock_file = acquire_lock()
+
         # Запускаем Flask в отдельном потоке
         server_thread = Thread(target=run_flask, daemon=True)
         server_thread.start()
@@ -390,12 +436,8 @@ if __name__ == "__main__":
         run_bot()
     except KeyboardInterrupt:
         print("Получен сигнал прерывания, завершаем работу...")
-        is_running = False
-        if bot:
-            bot.stop_polling()
+        cleanup()
     except Exception as e:
         print(f"Критическая ошибка: {e}")
-        is_running = False
-        if bot:
-            bot.stop_polling()
+        cleanup()
         sys.exit(1)
