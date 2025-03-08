@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: hostbook-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn hosthing:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120 --access-logfile - --error-logfile - --log-level info
+    envVars:
+      - key: TOKEN
+        sync: false
+      - key: WEBHOOK_URL
+        value: https://hostbook-bot.onrender.com
+      - key: DATABASE_URL
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.9.18
+      - key: PORT
+        value: 10000
+    healthCheckPath: /
+    plan: free 

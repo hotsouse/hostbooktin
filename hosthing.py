@@ -1,41 +1,53 @@
 import os
 import psycopg2
 from telebot import TeleBot, types
-from flask import Flask, request
+from flask import Flask, request, abort
 from threading import Lock
 import signal
 import sys
 import time
 import atexit
 import fcntl
+import logging
+from dotenv import load_dotenv
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Загрузка переменных окружения
+load_dotenv()
+
+def get_env_var(var_name):
+    """Получение переменной окружения с проверкой"""
+    value = os.getenv(var_name)
+    if not value:
+        logger.error(f"Ошибка: {var_name} не установлен")
+        if var_name == 'WEBHOOK_URL':
+            logger.info("WEBHOOK_URL должен быть в формате: https://your-app-name.onrender.com")
+        sys.exit(1)
+    return value
 
 # Инициализация переменных окружения
-TOKEN = os.getenv('TOKEN')
-if not TOKEN:
-    print("Ошибка: TOKEN не установлен")
-    sys.exit(1)
-
-WEBHOOK_URL = os.getenv('WEBHOOK_URL')
-if not WEBHOOK_URL:
-    print("Ошибка: WEBHOOK_URL не установлен")
-    sys.exit(1)
-
-DATABASE_URL = os.getenv('DATABASE_URL')
-if not DATABASE_URL:
-    print("Ошибка: DATABASE_URL не установлен")
-    sys.exit(1)
+TOKEN = get_env_var('TOKEN')
+WEBHOOK_URL = get_env_var('WEBHOOK_URL').rstrip('/')  # Удаляем trailing slash если есть
+DATABASE_URL = get_env_var('DATABASE_URL')
 
 # Создаем Flask приложение
 app = Flask(__name__)
 
-# Инициализация бота
-bot = TeleBot(TOKEN)
+# Инициализация бота с parse_mode='HTML'
+bot = TeleBot(TOKEN, parse_mode='HTML', threaded=False)
 
 # Флаг для контроля работы бота
 is_running = True
 
 # Добавляем блокировку для безопасного доступа к соединению
 db_lock = Lock()
+conn = None
 
 # Добавляем файл блокировки
 LOCK_FILE = "/tmp/telegram_bot.lock"
@@ -43,14 +55,11 @@ LOCK_FILE = "/tmp/telegram_bot.lock"
 def acquire_lock():
     """Получить блокировку процесса"""
     try:
-        # Открываем или создаем файл блокировки
         lock_file = open(LOCK_FILE, 'w')
-        # Пытаемся получить эксклюзивную блокировку
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return lock_file
     except IOError:
-        # Если не удалось получить блокировку, значит бот уже запущен
-        print("Бот уже запущен в другом процессе")
+        logger.error("Бот уже запущен в другом процессе")
         sys.exit(1)
 
 def release_lock(lock_file):
@@ -59,19 +68,19 @@ def release_lock(lock_file):
         fcntl.flock(lock_file, fcntl.LOCK_UN)
         lock_file.close()
         os.remove(LOCK_FILE)
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"Ошибка при освобождении блокировки: {e}")
 
 def cleanup():
     """Функция очистки при завершении"""
     global is_running, bot, lock_file
-    print("Выполняется очистка...")
+    logger.info("Выполняется очистка...")
     is_running = False
     if bot:
         try:
-            bot.stop_polling()
-        except:
-            pass
+            bot.remove_webhook()
+        except Exception as e:
+            logger.error(f"Ошибка при удалении вебхука: {e}")
     release_lock(lock_file)
 
 # Регистрируем функцию очистки
@@ -79,6 +88,7 @@ atexit.register(cleanup)
 
 def signal_handler(signum, frame):
     """Обработчик сигналов"""
+    logger.info(f"Получен сигнал {signum}")
     cleanup()
     sys.exit(0)
 
@@ -90,58 +100,84 @@ signal.signal(signal.SIGTERM, signal_handler)
 def home():
     return "Bot is running"
 
-# Обработчик вебхука
-@app.route('/' + TOKEN, methods=['POST'])
+@app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
     if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return ''
-    return 'OK'
+        try:
+            json_string = request.get_data().decode('utf-8')
+            update = types.Update.de_json(json_string)
+            bot.process_new_updates([update])
+            return ''
+        except Exception as e:
+            logger.error(f"Ошибка при обработке вебхука: {e}")
+            abort(500)
+    abort(403)
 
 def setup_webhook():
     try:
-        # Удаляем старый вебхук
-        bot.remove_webhook()
-        time.sleep(1)
+        # Сначала удаляем все вебхуки
+        bot.delete_webhook()
+        time.sleep(0.1)
+        
         # Устанавливаем новый вебхук
         webhook_url = f"{WEBHOOK_URL}/{TOKEN}"
-        bot.set_webhook(url=webhook_url)
-        print(f"Вебхук успешно установлен на {webhook_url}")
+        webhook_info = bot.get_webhook_info()
+        
+        # Проверяем текущий URL вебхука
+        if webhook_info.url != webhook_url:
+            bot.set_webhook(
+                url=webhook_url,
+                max_connections=100,
+                allowed_updates=['message', 'callback_query']
+            )
+            logger.info(f"Вебхук успешно установлен на {webhook_url}")
+        else:
+            logger.info("Вебхук уже установлен корректно")
+            
     except Exception as e:
-        print(f"Ошибка при установке вебхука: {e}")
+        logger.error(f"Ошибка при установке вебхука: {e}")
         sys.exit(1)
 
-# Подключение к базе данных с повторными попытками
-max_retries = 3
-retry_delay = 5
+def get_db_connection():
+    global conn
+    max_retries = 3
+    retry_delay = 5
 
-for attempt in range(max_retries):
+    for attempt in range(max_retries):
+        try:
+            with db_lock:
+                if conn is None or conn.closed:
+                    conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+                    conn.autocommit = False
+                return conn
+        except Exception as e:
+            logger.error(f"Попытка {attempt + 1} подключения к БД не удалась: {e}")
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(retry_delay)
+
+    raise Exception("Не удалось подключиться к базе данных")
+
+def init_database():
     try:
-        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
-        break
+        connection = get_db_connection()
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL UNIQUE,
+                    username TEXT,
+                    full_name TEXT,
+                    books TEXT,
+                    started BOOLEAN DEFAULT FALSE
+                )
+                ''')
+            connection.commit()
+        logger.info("База данных успешно инициализирована")
     except Exception as e:
-        if attempt == max_retries - 1:
-            print(f"Не удалось подключиться к базе данных после {max_retries} попыток: {e}")
-            sys.exit(1)
-        print(f"Попытка {attempt + 1} подключения к БД не удалась, повторная попытка через {retry_delay} секунд...")
-        time.sleep(retry_delay)
-
-# Создание таблицы пользователей
-with conn:
-    with conn.cursor() as cursor:
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            username TEXT,
-            full_name TEXT,
-            books TEXT,
-            started BOOLEAN DEFAULT FALSE
-        )
-        ''')
-    conn.commit()
+        logger.error(f"Ошибка при инициализации базы данных: {e}")
+        sys.exit(1)
 
 # Словарь для хранения состояний пользователей
 user_states = {}
@@ -245,7 +281,7 @@ def handle_start_button(message):
             reply_markup=main_menu(),
         )
     except Exception as e:
-        print(f"Ошибка в handle_start_button: {e}")
+        logger.error(f"Ошибка в handle_start_button: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка. Пожалуйста, попробуйте позже.")
 
 # Обработка нажатия на кнопку "Зарегистрироваться"
@@ -275,7 +311,7 @@ def register_user(message):
                     reply_markup=main_menu()
                 )
     except Exception as e:
-        print(f"Ошибка в register_user: {e}")
+        logger.error(f"Ошибка в register_user: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка при регистрации. Пожалуйста, попробуйте позже.", reply_markup=main_menu())
     clear_user_state(user_id)
 
@@ -301,7 +337,7 @@ def add_books(message):
             else:
                 bot.send_message(message.chat.id, "Ошибка! Вы не зарегистрированы.", reply_markup=main_menu())
     except Exception as e:
-        print(f"Ошибка в add_books: {e}")
+        logger.error(f"Ошибка в add_books: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка при добавлении книг. Пожалуйста, попробуйте позже.", reply_markup=main_menu())
     clear_user_state(user_id)
 
@@ -344,7 +380,7 @@ def search_books(message):
         else:
             bot.send_message(message.chat.id, "Книга не найдена.", reply_markup=main_menu())
     except Exception as e:
-        print(f"Ошибка в search_books: {e}")
+        logger.error(f"Ошибка в search_books: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка при поиске. Пожалуйста, попробуйте позже.", reply_markup=main_menu())
     clear_user_state(message.from_user.id)
 
@@ -404,44 +440,21 @@ def users_message(message):
     else:
         bot.send_message(message.chat.id, "У вас нет прав для доступа к этому меню.")
 
-# Добавляем функцию для получения соединения с базой данных
-def get_db_connection():
-    global conn
-    try:
-        # Проверяем соединение
-        with db_lock:
-            if conn is None or conn.closed:
-                conn = psycopg2.connect(DATABASE_URL, sslmode='require')
-            else:
-                # Проверяем работоспособность соединения
-                try:
-                    with conn.cursor() as cursor:
-                        cursor.execute('SELECT 1')
-                except psycopg2.Error:
-                    conn = psycopg2.connect(DATABASE_URL, sslmode='require')
-            return conn
-    except Exception as e:
-        print(f"Ошибка подключения к базе данных: {e}")
-        time.sleep(5)  # Ждем перед повторной попыткой
-        return get_db_connection()
-
 if __name__ == "__main__":
     try:
         # Получаем блокировку процесса
         lock_file = acquire_lock()
 
+        # Инициализируем базу данных
+        init_database()
+
         # Устанавливаем вебхук
         setup_webhook()
         
-        # Запускаем Flask
+        # Запускаем Flask с gunicorn
         port = int(os.getenv('PORT', 10000))
-        app.run(host='0.0.0.0', port=port, threaded=True)
-    except KeyboardInterrupt:
-        print("Получен сигнал прерывания, завершаем работу...")
-        bot.remove_webhook()
-        cleanup()
+        app.run(host='0.0.0.0', port=port)
     except Exception as e:
-        print(f"Критическая ошибка: {e}")
-        bot.remove_webhook()
+        logger.error(f"Критическая ошибка: {e}")
         cleanup()
         sys.exit(1)
