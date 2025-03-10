@@ -1,5 +1,5 @@
 import os
-import psycopg2
+import sqlite3
 from telebot import TeleBot, types
 from flask import Flask, request, abort
 from threading import Lock
@@ -10,6 +10,9 @@ import atexit
 import fcntl
 import logging
 from dotenv import load_dotenv
+import requests
+from requests.exceptions import RequestException
+import backoff
 
 # Настройка логирования
 logging.basicConfig(
@@ -34,7 +37,9 @@ def get_env_var(var_name):
 # Инициализация переменных окружения
 TOKEN = get_env_var('TOKEN')
 WEBHOOK_URL = get_env_var('WEBHOOK_URL').rstrip('/')  # Удаляем trailing slash если есть
-DATABASE_URL = get_env_var('DATABASE_URL')
+
+# Константы для базы данных
+DB_FILE = 'users_books.db'
 
 # Создаем Flask приложение
 app = Flask(__name__)
@@ -47,7 +52,6 @@ is_running = True
 
 # Добавляем блокировку для безопасного доступа к соединению
 db_lock = Lock()
-conn = None
 
 # Добавляем файл блокировки
 LOCK_FILE = "/tmp/telegram_bot.lock"
@@ -113,67 +117,40 @@ def webhook():
             abort(500)
     abort(403)
 
-def setup_webhook():
-    try:
-        # Сначала удаляем все вебхуки
-        bot.delete_webhook()
-        time.sleep(0.1)
-        
-        # Устанавливаем новый вебхук
-        webhook_url = f"{WEBHOOK_URL}/{TOKEN}"
-        webhook_info = bot.get_webhook_info()
-        
-        # Проверяем текущий URL вебхука
-        if webhook_info.url != webhook_url:
-            bot.set_webhook(
-                url=webhook_url,
-                max_connections=100,
-                allowed_updates=['message', 'callback_query']
-            )
-            logger.info(f"Вебхук успешно установлен на {webhook_url}")
-        else:
-            logger.info("Вебхук уже установлен корректно")
-            
-    except Exception as e:
-        logger.error(f"Ошибка при установке вебхука: {e}")
-        sys.exit(1)
+def exponential_backoff():
+    """Экспоненциальная задержка для повторных попыток"""
+    return backoff.on_exception(
+        backoff.expo,
+        (RequestException, ConnectionError),
+        max_tries=5,
+        max_time=300
+    )
 
-def get_db_connection():
-    global conn
-    max_retries = 3
-    retry_delay = 5
+@exponential_backoff()
+def setup_webhook_with_retry():
+    """Установка вебхука с механизмом повторных попыток"""
+    setup_webhook()
 
-    for attempt in range(max_retries):
-        try:
-            with db_lock:
-                if conn is None or conn.closed:
-                    conn = psycopg2.connect(DATABASE_URL, sslmode='require')
-                    conn.autocommit = False
-                return conn
-        except Exception as e:
-            logger.error(f"Попытка {attempt + 1} подключения к БД не удалась: {e}")
-            if attempt == max_retries - 1:
-                raise
-            time.sleep(retry_delay)
-
-    raise Exception("Не удалось подключиться к базе данных")
+def get_db():
+    """Получение соединения с базой данных"""
+    return sqlite3.connect(DB_FILE)
 
 def init_database():
+    """Инициализация базы данных"""
     try:
-        connection = get_db_connection()
-        with connection:
-            with connection.cursor() as cursor:
-                cursor.execute('''
-                CREATE TABLE IF NOT EXISTS users (
-                    id SERIAL PRIMARY KEY,
-                    user_id BIGINT NOT NULL UNIQUE,
-                    username TEXT,
-                    full_name TEXT,
-                    books TEXT,
-                    started BOOLEAN DEFAULT FALSE
-                )
-                ''')
-            connection.commit()
+        conn = get_db()
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL UNIQUE,
+                username TEXT,
+                full_name TEXT,
+                books TEXT,
+                started BOOLEAN DEFAULT FALSE
+            )
+            ''')
         logger.info("База данных успешно инициализирована")
     except Exception as e:
         logger.error(f"Ошибка при инициализации базы данных: {e}")
@@ -271,10 +248,11 @@ def start(message):
 def handle_start_button(message):
     user_id = message.from_user.id
     try:
-        connection = get_db_connection()
-        with connection.cursor() as cursor:
-            cursor.execute('UPDATE users SET started = TRUE WHERE user_id = %s', (user_id,))
-            connection.commit()
+        conn = get_db()
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE users SET started = TRUE WHERE user_id = ?', (user_id,))
+            conn.commit()
         bot.send_message(
             message.chat.id,
             "Добро пожаловать! Выберите 'Зарегистрироваться', чтобы начать обмен книгами.",
@@ -296,15 +274,16 @@ def register_user(message):
     username = message.from_user.username
 
     try:
-        connection = get_db_connection()
-        with connection.cursor() as cursor:
-            cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
+        conn = get_db()
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
             if cursor.fetchone():
                 bot.send_message(message.chat.id, "Регистрация завершена! Теперь можете добавить свои книги для обмена нажимая 'Добавить книги'.", reply_markup=main_menu())
             else:
-                cursor.execute('INSERT INTO users (user_id, username, full_name, books) VALUES (%s, %s, %s, %s)',
+                cursor.execute('INSERT INTO users (user_id, username, full_name, books) VALUES (?, ?, ?, ?)',
                              (user_id, username, full_name, ""))
-                connection.commit()
+                conn.commit()
                 bot.send_message(
                     message.chat.id,
                     "Регистрация завершена! Теперь отправьте список книг, которые вы хотите обменять.",
@@ -324,15 +303,16 @@ def add_books(message):
     books = message.text
     user_id = message.from_user.id
     try:
-        connection = get_db_connection()
-        with connection.cursor() as cursor:
-            cursor.execute('SELECT books FROM users WHERE user_id = %s', (user_id,))
+        conn = get_db()
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT books FROM users WHERE user_id = ?', (user_id,))
             result = cursor.fetchone()
             if result:
                 current_books = result[0] or ""
                 updated_books = current_books + (", " if current_books else "") + books
-                cursor.execute('UPDATE users SET books = %s WHERE user_id = %s', (updated_books, user_id))
-                connection.commit()
+                cursor.execute('UPDATE users SET books = ? WHERE user_id = ?', (updated_books, user_id))
+                conn.commit()
                 bot.send_message(message.chat.id, "Ваши книги успешно добавлены!", reply_markup=main_menu())
             else:
                 bot.send_message(message.chat.id, "Ошибка! Вы не зарегистрированы.", reply_markup=main_menu())
@@ -344,7 +324,9 @@ def add_books(message):
 # Функция: показать все доступные книги
 @bot.message_handler(func=lambda message: message.text == "Доступные книги")
 def available_books(message):
-    with conn.cursor() as cursor:
+    conn = get_db()
+    with conn:
+        cursor = conn.cursor()
         cursor.execute('SELECT username, books FROM users WHERE books IS NOT NULL AND books != \'\'')
         results = cursor.fetchall()
 
@@ -367,8 +349,9 @@ def search_books(message):
 
     book_name = message.text.lower()
     try:
-        connection = get_db_connection()
-        with connection.cursor() as cursor:
+        conn = get_db()
+        with conn:
+            cursor = conn.cursor()
             cursor.execute('SELECT full_name, username, books FROM users')
             results = []
             for row in cursor.fetchall():
@@ -393,8 +376,10 @@ def faq_message(message):
 @bot.message_handler(func=lambda message: message.text == "Мои книги")
 def my_books(message):
     user_id = message.from_user.id
-    with conn.cursor() as cursor:
-        cursor.execute('SELECT books FROM users WHERE user_id = %s', (user_id,))
+    conn = get_db()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT books FROM users WHERE user_id = ?', (user_id,))
         result = cursor.fetchone()
         if result and result[0]:
             bot.send_message(message.chat.id, f"Ваши книги:\n{result[0]}")
@@ -406,37 +391,43 @@ def my_books(message):
 def users_message(message):
     # Проверка, является ли пользователь администратором
     if message.from_user.id == 1213579921:  # Замените на свой ID
-        with conn.cursor() as cursor:
-            cursor.execute('SELECT full_name, username, started FROM users')
-            users = cursor.fetchall()
+        try:
+            conn = get_db()
+            with conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT full_name, username, started FROM users')
+                users = cursor.fetchall()
 
-            if users:
-                registered_users = [f"{user[0]} (@{user[1]})" for user in users if not user[2]]
-                started_users = [f"{user[0]} (@{user[1]})" for user in users if user[2]]
+                if users:
+                    registered_users = [f"{user[0]} (@{user[1]})" for user in users if not user[2]]
+                    started_users = [f"{user[0]} (@{user[1]})" for user in users if user[2]]
 
-                # Общее количество пользователей
-                total_users = len(registered_users) + len(started_users)
+                    # Общее количество пользователей
+                    total_users = len(users)
 
-                # Формируем ответ
-                response = f"Общее количество пользователей: {total_users}\n\n"
-                
-                # Список зарегистрированных пользователей
-                response += f"Список пользователей, которые зарегистрировались:\n\n"
-                if registered_users:
-                    response += "\n".join(registered_users) + "\n\n"
+                    # Формируем ответ
+                    response = f"Общее количество пользователей: {total_users}\n\n"
+                    
+                    # Список зарегистрированных пользователей
+                    response += f"Список пользователей, которые зарегистрировались:\n\n"
+                    if registered_users:
+                        response += "\n".join(registered_users) + "\n\n"
+                    else:
+                        response += "Нет зарегистрированных пользователей.\n\n"
+                    
+                    # Список пользователей, которые нажали на 'Старт'
+                    response += "Список пользователей, которые нажали на 'Старт':\n\n"
+                    if started_users:
+                        response += "\n".join(started_users)
+                    else:
+                        response += "Нет пользователей, которые нажали на 'Старт'."
+
+                    bot.send_message(message.chat.id, response)
                 else:
-                    response += "Нет зарегистрированных пользователей.\n\n"
-                
-                # Список пользователей, которые нажали на 'Старт'
-                response += "Список пользователей, которые нажали на 'Старт':\n\n"
-                if started_users:
-                    response += "\n".join(started_users)
-                else:
-                    response += "Нет пользователей, которые нажали на 'Старт'."
-
-                bot.send_message(message.chat.id, response)
-            else:
-                bot.send_message(message.chat.id, "Нет пользователей.")
+                    bot.send_message(message.chat.id, "Нет пользователей.")
+        except Exception as e:
+            logger.error(f"Ошибка при получении списка пользователей: {e}")
+            bot.send_message(message.chat.id, "Произошла ошибка при получении списка пользователей.")
     else:
         bot.send_message(message.chat.id, "У вас нет прав для доступа к этому меню.")
 
@@ -448,13 +439,33 @@ if __name__ == "__main__":
         # Инициализируем базу данных
         init_database()
 
-        # Устанавливаем вебхук
-        setup_webhook()
-        
-        # Запускаем Flask с gunicorn
-        port = int(os.getenv('PORT', 10000))
-        app.run(host='0.0.0.0', port=port)
+        max_retries = 5
+        retry_delay = 5  # начальная задержка в секундах
+
+        while max_retries > 0:
+            try:
+                # Устанавливаем вебхук с механизмом повторных попыток
+                setup_webhook_with_retry()
+                
+                # Запускаем Flask с gunicorn
+                port = int(os.getenv('PORT', 10000))
+                app.run(host='0.0.0.0', port=port)
+                break  # Если успешно запустились, выходим из цикла
+            except (RequestException, ConnectionError) as e:
+                max_retries -= 1
+                if max_retries > 0:
+                    logger.warning(f"Ошибка подключения: {e}. Повторная попытка через {retry_delay} секунд...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # увеличиваем задержку экспоненциально
+                else:
+                    logger.error(f"Не удалось установить соединение после всех попыток: {e}")
+                    raise
+            except Exception as e:
+                logger.error(f"Критическая ошибка: {e}")
+                raise
     except Exception as e:
         logger.error(f"Критическая ошибка: {e}")
         cleanup()
         sys.exit(1)
+    finally:
+        cleanup()
