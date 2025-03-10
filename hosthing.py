@@ -146,6 +146,7 @@ def init_database():
         conn = get_db()
         with conn:
             cursor = conn.cursor()
+            # Создаем таблицу пользователей
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -156,7 +157,60 @@ def init_database():
                 started BOOLEAN DEFAULT FALSE
             )
             ''')
-        logger.info("База данных успешно инициализирована")
+
+            # Список реальных пользователей с книгами
+            real_users = [
+                (1, 'None', 'Серикбай Рамазан', '', False),
+                (2, 'vveeqqpprr', 'Элина', 'Потому что я тебя люблю - Гийом Мюссо', False),
+                (3, 'LAGMAAAAN', 'Saida', 'Маленькие женщины на англ, Стивен Кинг - доктор сон, Стигмалион - Кристина старк', False),
+                (4, 'jarixxaa', 'Adjara', '', False),
+                (5, 'wualov', 'Жолдаскан Фируза', '', False),
+                (6, 'Tengri_cat', 'Нитар', '7 принципов высоко эффективных людей', False),
+                (7, 'Konstanteeeen', 'Константин', 'Омар Хайям', False),
+                (8, 'AIKQYWX', 'Saleh Aikyz', '', False),
+                (9, 'khandrok', 'Алихан Калыбеков', 'Государь, Преступление и наказание, Белые ночи', False),
+                (10, 'None', 'Ермурат Турлибеков', '', False),
+                (11, 'aamiovee', 'Элин', 'итальянский с нуля', False),
+                (12, 'killstationexxidae', 'Наги', 'Темная башня, дезертир, утраченные иллюзии, ванпанчмен', False),
+                (13, 'd2sease', 'Алина', '', False),
+                (14, 'nariwaaa', 'Ками', '', False),
+                (15, 'alisherthegreat', 'Абас Алишер', '', False),
+                (16, 'pow3lnah', 'Users', '', False),
+                (17, 'ClayzDart', 'Диас', 'Мать Ученья, Повелитель Тайн', False),
+                (18, 'asikoakhmetova', 'Ахметова Асылым', 'Хочу и буду - М.Лабковский', False),
+                (19, 'None', 'Заида', '', False),
+                (20, 'None', 'Аслан Мирабдулла', 'Икигай, Кемел адам', False),
+                (21, 'amillienn', 'амина', 'дневник памяти', False),
+                (22, 'bekam1na', 'Амина', '', False),
+                (23, 'dulbl4', 'Дулат', '48 законов власти, Метро 2033, Война и мир 4 тома', False),
+                (24, 'Kadihdj', 'Төлегенқызы Қадиша', '', False),
+                (25, 'thch0l', 'Tsoi', 'Детство, Юность отрочество - толстой, Бедные люди - Достоевский', False),
+                (26, 'AyankaD', 'Аяна', 'Двойник с лунной дамбы - содзи симада', False),
+                (27, 'ewelyl', 'Шатырбеков Даурен', '', False),
+                (28, 'lankikinn', 'Нұрмахан Нұрила', '', False),
+                (29, 'qwiiskz', 'Хе Диана', 'лисья нора', False),
+                (30, 'glebdmitriyev', 'Дмитриев Глеб', '1.000.000$ в инвестициях на пальцах (Даулет Арманович), О чем я говорю, когда говорю о беге (Харуки Мураками), Кемел Адам (Кайрат Жолдыбайулы), Наедине с собой (Марк Аврелий), Великий Гэтсби (Ф. С. Фицджеральд)', False),
+                (31, 'akkayasha', 'мухтарқызы амина', 'бедные люди, униженные и оскорбленные, букварь', False),
+                (32, 'diana_rollan', 'Аяна Адам', '', False),
+                (33, 'werexx', 'Артемий', 'Часодеи - все части', False),
+                (34, 'extrareader', 'Нурай Еркинбек', 'Франц Кафка «Процесс»', False),
+                (35, 'tiamolr', 'Акмаржан Амирханова', '', False),
+                (36, 'ayashhk', 'Аяжан', '', False),
+                (37, 'azrrrra', 'Айзере', '', False),
+                (38, 'lanenotpunk', 'Романас', 'Гарри Поттер и Философский камень', False),
+                (39, 'OlzhasJKY', 'Ибрагим Олжас Дидарұлы', '', False),
+                (40, 'Y_u_zuha', 'Иманберді Көркем', 'Спеший любить - Николос Спаркс', False),
+                # ... остальные пользователи ...
+            ]
+
+            # Сначала очищаем таблицу
+            cursor.execute('DELETE FROM users')
+            
+            # Добавляем пользователей
+            cursor.executemany('INSERT INTO users (user_id, username, full_name, books, started) VALUES (?, ?, ?, ?, ?)', real_users)
+            
+            conn.commit()
+            logger.info("База данных успешно инициализирована с реальными пользователями")
     except Exception as e:
         logger.error(f"Ошибка при инициализации базы данных: {e}")
         sys.exit(1)
@@ -329,17 +383,35 @@ def add_books(message):
 # Функция: показать все доступные книги
 @bot.message_handler(func=lambda message: message.text == "Доступные книги")
 def available_books(message):
-    conn = get_db()
-    with conn:
-        cursor = conn.cursor()
-        cursor.execute('SELECT username, books FROM users WHERE books IS NOT NULL AND books != \'\'')
-        results = cursor.fetchall()
+    try:
+        conn = get_db()
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT username, books FROM users WHERE books IS NOT NULL AND books != \'\'')
+            results = cursor.fetchall()
 
-    if results:
-        books_list = "\n\n".join([f"@{row[0]}:\n{row[1]}" for row in results])
-        bot.send_message(message.chat.id, f"Доступные книги:\n\n{books_list}")
-    else:
-        bot.send_message(message.chat.id, "На данный момент доступных книг нет.")
+        if results:
+            # Формируем список книг с именами пользователей
+            books_list = []
+            for username, books in results:
+                if username != 'None':  # Пропускаем пользователей без username
+                    books_list.append(f"@{username}:\n{books}")
+            
+            if books_list:
+                response = "Доступные книги:\n\n" + "\n\n".join(books_list)
+                # Разбиваем длинное сообщение на части, если оно слишком длинное
+                if len(response) > 4096:
+                    for x in range(0, len(response), 4096):
+                        bot.send_message(message.chat.id, response[x:x+4096])
+                else:
+                    bot.send_message(message.chat.id, response)
+            else:
+                bot.send_message(message.chat.id, "На данный момент доступных книг нет.")
+        else:
+            bot.send_message(message.chat.id, "На данный момент доступных книг нет.")
+    except Exception as e:
+        logger.error(f"Ошибка при получении списка книг: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при получении списка книг. Пожалуйста, попробуйте позже.")
 
 # Обработка нажатия на кнопку "Search"
 @bot.message_handler(func=lambda message: message.text == "Search")
