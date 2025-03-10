@@ -28,9 +28,14 @@ def get_env_var(var_name):
     """Получение переменной окружения с проверкой"""
     value = os.getenv(var_name)
     if not value:
-        logger.error(f"Ошибка: {var_name} не установлен")
+        logger.error(f"Ошибка: Переменная окружения {var_name} не установлена")
         if var_name == 'WEBHOOK_URL':
-            logger.info("WEBHOOK_URL должен быть в формате: https://your-app-name.onrender.com")
+            logger.error(f"WEBHOOK_URL должен быть установлен в настройках Render")
+            logger.error(f"Формат: https://your-app-name.onrender.com")
+            logger.error(f"Пример: https://hostbooktin.onrender.com")
+        elif var_name == 'TOKEN':
+            logger.error(f"TOKEN должен быть установлен в настройках Render")
+            logger.error(f"Получите токен у @BotFather в Telegram")
         sys.exit(1)
     return value
 
@@ -430,6 +435,34 @@ def users_message(message):
             bot.send_message(message.chat.id, "Произошла ошибка при получении списка пользователей.")
     else:
         bot.send_message(message.chat.id, "У вас нет прав для доступа к этому меню.")
+
+def setup_webhook():
+    """Установка вебхука"""
+    try:
+        # Сначала удаляем все вебхуки
+        bot.delete_webhook()
+        time.sleep(0.1)
+        
+        # Устанавливаем новый вебхук
+        webhook_url = f"{WEBHOOK_URL}/{TOKEN}"
+        webhook_info = bot.get_webhook_info()
+        
+        # Проверяем текущий URL вебхука
+        if webhook_info.url != webhook_url:
+            bot.set_webhook(
+                url=webhook_url,
+                max_connections=100,
+                allowed_updates=['message', 'callback_query']
+            )
+            logger.info(f"Вебхук успешно установлен на {webhook_url}")
+        else:
+            logger.info("Вебхук уже установлен корректно")
+            
+    except Exception as e:
+        logger.error(f"Ошибка при установке вебхука: {str(e)}")
+        logger.error(f"Проверьте правильность WEBHOOK_URL и TOKEN")
+        logger.error(f"Текущий WEBHOOK_URL: {WEBHOOK_URL}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     try:
