@@ -8,9 +8,9 @@ services:
       - key: TOKEN
         sync: false
       - key: WEBHOOK_URL
-        value: https://hostbook-bot.onrender.com
-      - key: DATABASE_URL
-        sync: false
+        value: https://hostbooktinder.onrender.com
+      - key: ENVIRONMENT
+        value: production
       - key: PYTHON_VERSION
         value: 3.9.18
       - key: PORT

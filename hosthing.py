@@ -70,27 +70,41 @@ def acquire_lock():
     except IOError:
         logger.error("Бот уже запущен в другом процессе")
         sys.exit(1)
+    except Exception as e:
+        logger.error(f"Ошибка при получении блокировки: {e}")
+        sys.exit(1)
 
 def release_lock(lock_file):
     """Освободить блокировку процесса"""
-    try:
-        fcntl.flock(lock_file, fcntl.LOCK_UN)
-        lock_file.close()
-        os.remove(LOCK_FILE)
-    except Exception as e:
-        logger.error(f"Ошибка при освобождении блокировки: {e}")
+    if lock_file and not lock_file.closed:
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+            lock_file.close()
+        except Exception as e:
+            logger.error(f"Ошибка при освобождении блокировки: {e}")
+        finally:
+            try:
+                if os.path.exists(LOCK_FILE):
+                    os.remove(LOCK_FILE)
+            except Exception as e:
+                logger.error(f"Ошибка при удалении файла блокировки: {e}")
 
 def cleanup():
     """Функция очистки при завершении"""
     global is_running, bot, lock_file
     logger.info("Выполняется очистка...")
     is_running = False
+    
+    # Удаляем вебхук
     if bot:
         try:
             bot.remove_webhook()
         except Exception as e:
             logger.error(f"Ошибка при удалении вебхука: {e}")
-    release_lock(lock_file)
+    
+    # Освобождаем блокировку
+    if 'lock_file' in globals():
+        release_lock(lock_file)
 
 # Регистрируем функцию очистки
 atexit.register(cleanup)
@@ -537,6 +551,7 @@ def setup_webhook():
         sys.exit(1)
 
 if __name__ == "__main__":
+    lock_file = None
     try:
         # Получаем блокировку процесса
         lock_file = acquire_lock()
@@ -544,30 +559,36 @@ if __name__ == "__main__":
         # Инициализируем базу данных
         init_database()
 
-        max_retries = 5
-        retry_delay = 5  # начальная задержка в секундах
+        # Устанавливаем вебхук с механизмом повторных попыток
+        setup_webhook_with_retry()
+        
+        # Запускаем Flask с gunicorn
+        port = int(os.getenv('PORT', 10000))
+        if os.getenv('ENVIRONMENT') == 'production':
+            from gunicorn.app.base import BaseApplication
 
-        while max_retries > 0:
-            try:
-                # Устанавливаем вебхук с механизмом повторных попыток
-                setup_webhook_with_retry()
-                
-                # Запускаем Flask с gunicorn
-                port = int(os.getenv('PORT', 10000))
-                app.run(host='0.0.0.0', port=port)
-                break  # Если успешно запустились, выходим из цикла
-            except (RequestException, ConnectionError) as e:
-                max_retries -= 1
-                if max_retries > 0:
-                    logger.warning(f"Ошибка подключения: {e}. Повторная попытка через {retry_delay} секунд...")
-                    time.sleep(retry_delay)
-                    retry_delay *= 2  # увеличиваем задержку экспоненциально
-                else:
-                    logger.error(f"Не удалось установить соединение после всех попыток: {e}")
-                    raise
-            except Exception as e:
-                logger.error(f"Критическая ошибка: {e}")
-                raise
+            class FlaskApplication(BaseApplication):
+                def __init__(self, app, options=None):
+                    self.application = app
+                    self.options = options or {}
+                    super().__init__()
+
+                def load_config(self):
+                    for key, value in self.options.items():
+                        self.cfg.set(key, value)
+
+                def load(self):
+                    return self.application
+
+            options = {
+                'bind': f'0.0.0.0:{port}',
+                'workers': 1,  # Для работы с вебхуком достаточно одного воркера
+                'timeout': 120,
+                'preload_app': True
+            }
+            FlaskApplication(app, options).run()
+        else:
+            app.run(host='0.0.0.0', port=port)
     except Exception as e:
         logger.error(f"Критическая ошибка: {e}")
         cleanup()
