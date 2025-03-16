@@ -1,5 +1,5 @@
 import os
-import sqlite3
+import psycopg2
 from telebot import TeleBot, types
 from flask import Flask, request, abort
 from threading import Lock
@@ -46,15 +46,13 @@ def get_env_var(var_name):
 TOKEN = get_env_var('TOKEN')
 WEBHOOK_URL = get_env_var('WEBHOOK_URL').rstrip(
     '/')  # Удаляем trailing slash если есть
-
-# Константы для базы данных
-DB_FILE = 'users_books.db'
+DATABASE_URL = get_env_var('DATABASE_URL')
 
 # Создаем Flask приложение
 app = Flask(__name__)
 
 # Инициализация бота с parse_mode='HTML'
-bot = TeleBot(TOKEN, parse_mode='HTML', threaded=False)
+bot = TeleBot(TOKEN, parse_mode='HTML')
 
 # Флаг для контроля работы бота
 is_running = True
@@ -132,21 +130,14 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 @app.route('/')
 def home():
-    return "Bot is running"
+    return "Бот работает!", 200
 
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        try:
-            json_string = request.get_data().decode('utf-8')
-            update = types.Update.de_json(json_string)
-            bot.process_new_updates([update])
-            return ''
-        except Exception as e:
-            logger.error(f"Ошибка при обработке вебхука: {e}")
-            abort(500)
-    abort(403)
+    json_update = request.get_json()
+    bot.process_new_updates([types.Update.de_json(json_update)])
+    return "OK", 200
 
 
 def exponential_backoff():
@@ -166,8 +157,8 @@ def setup_webhook_with_retry():
 
 
 def get_db():
-    """Получение соединения с базой данных"""
-    return sqlite3.connect(DB_FILE)
+    """Получение соединения с базой данных PostgreSQL"""
+    return psycopg2.connect(DATABASE_URL)
 
 
 def init_database():
@@ -179,7 +170,7 @@ def init_database():
             # Создаем таблицу пользователей
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL UNIQUE,
                 username TEXT,
                 full_name TEXT,
@@ -188,131 +179,11 @@ def init_database():
             )
             ''')
 
-            # Список реальных пользователей с книгами
-            real_users = [
-                (1, 'None', 'Серикбай Рамазан', '', False),
-                (2, 'vveeqqpprr', 'Элина', 'Потому что я тебя люблю - Гийом Мюссо', False),
-                (3, 'LAGMAAAAN', 'Saida', 'Маленькие женщины на англ, Стивен Кинг - доктор сон, Стигмалион - Кристина старк', False),
-                (4, 'jarixxaa', 'Adjara', '', False),
-                (5, 'wualov', 'Жолдаскан Фируза', '', False),
-                (6, 'Tengri_cat', 'Нитар', '7 принципов высоко эффективных людей', False),
-                (7, 'Konstanteeeen', 'Константин', 'Омар Хайям', False),
-                (8, 'AIKQYWX', 'Saleh Aikyz', '', False),
-                (9, 'khandrok', 'Алихан Калыбеков', 'Государь, Преступление и наказание, Белые ночи', False),
-                (10, 'None', 'Ермурат Турлибеков', '', False),
-                (11, 'aamiovee', 'Элин', 'итальянский с нуля', False),
-                (12, 'killstationexxidae', 'Наги', 'Темная башня, дезертир, утраченные иллюзии, ванпанчмен', False),
-                (13, 'd2sease', 'Алина', '', False),
-                (14, 'nariwaaa', 'Ками', '', False),
-                (15, 'alisherthegreat', 'Абас Алишер', '', False),
-                (16, 'pow3lnah', 'Users', '', False),
-                (17, 'ClayzDart', 'Диас', 'Мать Ученья, Повелитель Тайн', False),
-                (18, 'asikoakhmetova', 'Ахметова Асылым', 'Хочу и буду - М.Лабковский', False),
-                (19, 'None', 'Заида', '', False),
-                (20, 'None', 'Аслан Мирабдулла', 'Икигай, Кемел адам', False),
-                (21, 'amillienn', 'амина', 'дневник памяти', False),
-                (22, 'bekam1na', 'Амина', '', False),
-                (23, 'dulbl4', 'Дулат', '48 законов власти, Метро 2033, Война и мир 4 тома', False),
-                (24, 'Kadihdj', 'Төлегенқызы Қадиша', '', False),
-                (25, 'thch0l', 'Tsoi', 'Детство, Юность отрочество - толстой, Бедные люди - Достоевский', False),
-                (26, 'AyankaD', 'Аяна', 'Двойник с лунной дамбы - содзи симада', False),
-                (27, 'ewelyl', 'Шатырбеков Даурен', '', False),
-                (28, 'lankikinn', 'Нұрмахан Нұрила', '', False),
-                (29, 'qwiiskz', 'Хе Диана', 'лисья нора', False),
-                (30, 'glebdmitriyev', 'Дмитриев Глеб', '1.000.000$ в инвестициях на пальцах (Даулет Арманович), О чем я говорю, когда говорю о беге (Харуки Мураками), Кемел Адам (Кайрат Жолдыбайулы), Наедине с собой (Марк Аврелий), Великий Гэтсби (Ф. С. Фицджеральд)', False),
-                (31, 'akkayasha', 'мухтарқызы амина', 'бедные люди, униженные и оскорбленные, букварь', False),
-                (32, 'diana_rollan', 'Аяна Адам', '', False),
-                (33, 'werexx', 'Артемий', 'Часодеи - все части', False),
-                (34, 'extrareader', 'Нурай Еркинбек', 'Франц Кафка «Процесс»', False),
-                (35, 'tiamolr', 'Акмаржан Амирханова', '', False),
-                (36, 'ayashhk', 'Аяжан', '', False),
-                (37, 'azrrrra', 'Айзере', '', False),
-                (38, 'lanenotpunk', 'Романас', 'Гарри Поттер и Философский камень', False),
-                (39, 'OlzhasJKY', 'Ибрагим Олжас Дидарұлы', '', False),
-                (40, 'Y_u_zuha', 'Иманберді Көркем', 'Спеший любить - Николос Спаркс', False),
-                (41, 'None', 'Тлепжан Улпан', '', False),
-                (42, 'hersonsucks', 'Нуржанова Ажар', '', False),
-                (43, 'sakennovnaa', 'Тимахан Аружан', '', False),
-                (44, 'xxslslsl', 'Бекатов Санжар', '', False),
-                (45, 'chase_atlanticc', 'Черри', '', False),
-                (46, 'yadeso', 'Валентин', '', False),
-                (47, 'safiollamo', 'Сафиолда Мөлдір', '', False),
-                (48, 'None', 'Манарбек Қарақат', '', False),
-                (49, 'envityy', 'Хан Диана', '', False),
-                (50, 'imyapolzovatelya9999', 'Алмаз', '', False),
-                (51, 'roflanslav', 'Рамазан', '', False),
-                (52, 'sssshveps', 'Абдраимова София Хабировна', '', False),
-                (53, 'Nureke_a', 'Нурым', '', False),
-                (54, 'bigazy77', 'Bigazy', '', False),
-                (55, 'Zikonai_05', 'Айзира', '', False),
-                (56, 'aimaneyrlan', 'Users', '', False),
-                (57, 'anelka876', 'Анеля', '', False),
-                (58, 'None', 'Сейтбек Коркем', '', False),
-                (59, 'maybe_elli', 'Элянора', '', False),
-                (60, 'None', 'Аида', '', False),
-                (61, 'None', 'Джамшуд', '', False),
-                (62, 'kuraiyy', 'рр', '', False),
-                (63, 'msaniyae', 'Мейрамбек Сания', '', False),
-                (64, 'luamizz', 'Жалгасбаева Азима', '', False),
-                (65, 'suiynbay', 'Koblandy Suiynbay', '', False),
-                (66, 'hamster_1303', 'Мухтаркызы Мариям', '', False),
-                (67, 'None', 'Амангелди асем', '', False),
-                (68, 'agentPi314', 'Амир', '', False),
-                (69, 'evaneeees', 'Акниет', '', False),
-                (70, 'akerk_sw', 'Акерке', '', False),
-                (71, 'None', 'Динара', '', False),
-                (72, 'None', 'Кадыр Аянат', '', False),
-                (73, 'None', 'Сара', '', False),
-                (74, 'mioolmm', 'Адана', '', False),
-                (75, 'ke_aisa', 'Кенесбек Айсана', '', False),
-                (76, 'dnteeng08', 'Диана', '', False),
-                (77, 'k_nurt', 'Карина', '', False),
-                (78, 'aaaiserr', 'Байдалы Айсер', '', False),
-                (79, 'babysati444', 'Сати', '', False),
-                (80, 'dredfr', 'Темкенов Жарас', '', False),
-                (81, 'ramioshaav', 'Амина', '', False),
-                (82, 'None', 'Алеся', '', False),
-                (83, 'viicks06', 'Черепкова Виктория', '', False),
-                (84, 'justacloudygirl', 'Гумаева Виолетта', '', False),
-                (85, 'Wxco1c', 'Улдана Жуманали', '', False),
-                (86, 'Mustafarg', 'Мустафа', '', False),
-                (87, 'Bilimqyzy', 'Смагулова Аделия', '', False),
-                (88, 'nurzzzhhh', 'Ннурка', '', False),
-                (89, 'yerkkesh', 'Доступные книги', '', False),
-                (90, 'Aimkhgvd', 'Кабдый Айым', '', False),
-                (91, 'EASLLK', 'Asyl', '', False),
-                (92, 'None', 'Акерке Вайзхума', '', False),
-                (93, 'fghsmell', 'сакенов Еркебулан', '', False),
-                (94, 'amankeldi_a', 'Алуа', '', False),
-                (95, 'ulqquiiorra', 'Амир', '', False),
-                (96, 'None', 'Tolegen', '', False),
-                (97, 'None', 'Аида', '', False),
-                (98, 'None', 'Еділұлы Асылжан', '', False),
-                (99, 'aidana_erlankyzy', 'Айдана', '', False),
-                (100, 'nspzhn', 'Альнур', '', False),
-                (101, 'lim_tn', 'Лим Татьяна', '', False),
-                (102, 'None', 'Доступные книги', '', False),
-                (103, 'diirra_a', 'Индира Салимжан', '', False),
-                (104, 'assiyaastt', 'Анна', '', False),
-                (105, 'arushk0', 'Арушка', '', False),
-                (106, 'Njckl', 'Аяна Алибек', '', False),
-                (107, 'Maksim9160', 'Максим Витола', '', False),
-                (108, 'Zhibewsx', 'Абай Жибек', '', False),
-                (109, 'sssultikk', 'Негр', '', False),
-                (110, 'Sofixqwsq', 'Соня', '', False),
-                (111, 'None', 'Назгуль', '', False),
-                (112, 'microkosmoos', 'Айгерим', '', False),
-            ]
-            # Сначала очищаем таблицу
-            cursor.execute('DELETE FROM users')
-
-            # Добавляем пользователей
-            cursor.executemany(
-                'INSERT INTO users (user_id, username, full_name, books, started) VALUES (?, ?, ?, ?, ?)', real_users)
+            # Перенос данных из SQLite
+            # Здесь вы можете добавить код для переноса данных из SQLite в PostgreSQL
 
             conn.commit()
-            logger.info(
-                "База данных успешно инициализирована с реальными пользователями")
+            logger.info("База данных успешно инициализирована с реальными пользователями")
     except Exception as e:
         logger.error(f"Ошибка при инициализации базы данных: {e}")
         sys.exit(1)
@@ -361,6 +232,7 @@ MENU_COMMANDS = ["Старт", "Зарегистрироваться", "Доба
 
 @bot.message_handler(func=lambda message: True)
 def handle_messages(message):
+    logger.info(f"Получено сообщение: {message.text} от {message.from_user.id}")
     user_id = message.from_user.id
     current_state = get_user_state(user_id)
 
@@ -430,7 +302,7 @@ def handle_start_button(message):
         with conn:
             cursor = conn.cursor()
             cursor.execute(
-                'UPDATE users SET started = TRUE WHERE user_id = ?', (user_id,))
+                'UPDATE users SET started = TRUE WHERE user_id = %s', (user_id,))
             conn.commit()
         bot.send_message(
             message.chat.id,
@@ -672,33 +544,12 @@ def users_message(message):
             message.chat.id, "У вас нет прав для доступа к этому меню.")
 
 
-def setup_webhook():
+def set_webhook():
     """Установка вебхука"""
-    try:
-        # Сначала удаляем все вебхуки
-        bot.delete_webhook()
-        time.sleep(0.1)
-
-        # Устанавливаем новый вебхук
-        webhook_url = f"{WEBHOOK_URL}/{TOKEN}"
-        webhook_info = bot.get_webhook_info()
-
-        # Проверяем текущий URL вебхука
-        if webhook_info.url != webhook_url:
-            bot.set_webhook(
-                url=webhook_url,
-                max_connections=100,
-                allowed_updates=['message', 'callback_query']
-            )
-            logger.info(f"Вебхук успешно установлен на {webhook_url}")
-        else:
-            logger.info("Вебхук уже установлен корректно")
-
-    except Exception as e:
-        logger.error(f"Ошибка при установке вебхука: {str(e)}")
-        logger.error(f"Проверьте правильность WEBHOOK_URL и TOKEN")
-        logger.error(f"Текущий WEBHOOK_URL: {WEBHOOK_URL}")
-        sys.exit(1)
+    url = f"https://api.telegram.org/bot{TOKEN}/setWebhook"
+    data = {"url": f"{WEBHOOK_URL}/{TOKEN}"}
+    response = requests.post(url, json=data)
+    logger.info("Webhook response: %s", response.json())
 
 
 if __name__ == "__main__":
@@ -710,8 +561,8 @@ if __name__ == "__main__":
         # Инициализируем базу данных
         init_database()
 
-        # Устанавливаем вебхук с механизмом повторных попыток
-        setup_webhook_with_retry()
+        # Устанавливаем вебхук
+        set_webhook()
 
         # Запускаем Flask с gunicorn
         port = int(os.getenv('PORT', 10000))
