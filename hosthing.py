@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 import requests
 from requests.exceptions import RequestException
 import backoff
+from sqlalchemy import create_engine
 
 # Настройка логирования
 logging.basicConfig(
@@ -24,6 +25,21 @@ logger = logging.getLogger(__name__)
 # Загрузка переменных окружения
 load_dotenv()
 
+# Инициализация DATABASE_URL
+database_url = os.getenv("DATABASE_URL")
+
+# Если `DATABASE_URL` пустой, используем SQLite по умолчанию
+if not database_url:
+    database_url = "sqlite:///users_books.db"
+
+# Если используется SQLite, убедимся в правильном формате
+if database_url.startswith("sqlite:////"):
+    database_url = database_url.replace("sqlite:////", "sqlite:///")
+
+print(f"Используемая DATABASE_URL: {database_url}")  # Debugging
+
+# Создание движка базы данных
+engine = create_engine(database_url)
 
 def get_env_var(var_name):
     """Получение переменной окружения с проверкой"""
