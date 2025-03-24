@@ -11,3 +11,4 @@ with engine.connect() as connection:
     connection.execute("CREATE TABLE IF NOT EXISTS example (id INTEGER PRIMARY KEY, name TEXT)")
 
 print("База данных успешно создана!")
+
