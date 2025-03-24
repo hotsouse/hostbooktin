@@ -29,13 +29,14 @@ load_dotenv()
 # Инициализация DATABASE_URL
 database_url = os.getenv("DATABASE_URL")
 
-# Если `DATABASE_URL` пустой, используем SQLite по умолчанию
+# Если `DATABASE_URL` пустой, создаем каталог и используем SQLite по умолчанию
 if not database_url:
-    database_url = "sqlite:////tmp/users_books.db"
+    os.makedirs("/data", exist_ok=True)  # Создаем каталог для базы данных
+    database_url = "sqlite:///data/users_books.db"
 
 # Если используется SQLite, убедимся в правильном формате
-if database_url.startswith("sqlite:////"):
-    database_url = database_url.replace("sqlite:////", "sqlite:///")
+if database_url.startswith("sqlite:"):
+    database_url = f"sqlite:///{database_url.lstrip('sqlite:/')}"
 
 print(f"Используемая DATABASE_URL: {database_url}")  # Debugging
 
@@ -48,14 +49,10 @@ def get_env_var(var_name):
     if not value:
         logger.error(f"Ошибка: Переменная окружения {var_name} не установлена")
         if var_name == 'WEBHOOK_URL':
-            logger.error(
-                f"WEBHOOK_URL должен быть установлен в настройках Render")
-            logger.error(f"Формат: https://your-app-name.onrender.com")
-            logger.error(f"Пример: https://hostbooktin.onrender.com")
+            logger.error("WEBHOOK_URL должен быть установлен в настройках Render")
         elif var_name == 'TOKEN':
-            logger.error(f"TOKEN должен быть установлен в настройках Render")
-            logger.error(f"Получите токен у @BotFather в Telegram")
-        sys.exit(1)
+            logger.error("Получите токен у @BotFather в Telegram")
+        raise EnvironmentError(f"Переменная окружения {var_name} не установлена")
     return value
 
 
@@ -83,6 +80,7 @@ LOCK_FILE = "/tmp/telegram_bot.lock"
 
 def acquire_lock():
     """Получить блокировку процесса"""
+    global lock_file
     try:
         lock_file = open(LOCK_FILE, 'w')
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -578,6 +576,16 @@ def set_webhook():
     data = {"url": f"{WEBHOOK_URL}/{TOKEN}"}
     response = requests.post(url, json=data)
     logger.info("Webhook response: %s", response.json())
+
+
+@backoff.on_exception(
+    backoff.expo,
+    (RequestException, ConnectionError),
+    max_tries=5,
+    max_time=300
+)
+def make_request(url):
+    return requests.get(url)
 
 
 if __name__ == "__main__":
