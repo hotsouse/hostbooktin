@@ -14,6 +14,7 @@ import requests
 from requests.exceptions import RequestException
 import backoff
 from sqlalchemy import create_engine
+import sqlite3
 
 # Настройка логирования
 logging.basicConfig(
@@ -30,7 +31,7 @@ database_url = os.getenv("DATABASE_URL")
 
 # Если `DATABASE_URL` пустой, используем SQLite по умолчанию
 if not database_url:
-    database_url = "sqlite:///tmp/users_books.db"
+    database_url = "sqlite:////tmp/users_books.db"
 
 # Если используется SQLite, убедимся в правильном формате
 if database_url.startswith("sqlite:////"):
@@ -173,17 +174,31 @@ def setup_webhook_with_retry():
 
 
 def get_db():
-    """Получение соединения с базой данных PostgreSQL"""
-    return psycopg2.connect(DATABASE_URL)
+    """Получение соединения с базой данных"""
+    if DATABASE_URL.startswith("sqlite:///"):
+        return sqlite3.connect(DATABASE_URL.replace("sqlite:///", ""))
+    else:
+        return psycopg2.connect(DATABASE_URL)
 
 
 def init_database():
     """Инициализация базы данных"""
     try:
         conn = get_db()
-        with conn:
-            cursor = conn.cursor()
-            # Создаем таблицу пользователей
+        cursor = conn.cursor()
+
+        if isinstance(conn, sqlite3.Connection):
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL UNIQUE,
+                username TEXT,
+                full_name TEXT,
+                books TEXT,
+                started BOOLEAN DEFAULT FALSE
+            )
+            ''')
+        else:
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
@@ -195,11 +210,8 @@ def init_database():
             )
             ''')
 
-            # Перенос данных из SQLite
-            # Здесь вы можете добавить код для переноса данных из SQLite в PostgreSQL
-
-            conn.commit()
-            logger.info("База данных успешно инициализирована с реальными пользователями")
+        conn.commit()
+        logger.info("База данных успешно инициализирована")
     except Exception as e:
         logger.error(f"Ошибка при инициализации базы данных: {e}")
         sys.exit(1)
