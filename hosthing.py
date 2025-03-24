@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 import requests
 from requests.exceptions import RequestException
 import backoff
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, MetaData
 import sqlite3
 
 # Настройка логирования
@@ -42,6 +42,7 @@ print(f"Используемая DATABASE_URL: {database_url}")  # Debugging
 
 # Создание движка базы данных
 engine = create_engine(database_url)
+metadata = MetaData()
 
 def get_env_var(var_name):
     """Получение переменной окружения с проверкой"""
@@ -182,33 +183,8 @@ def get_db():
 def init_database():
     """Инициализация базы данных"""
     try:
-        conn = get_db()
-        cursor = conn.cursor()
-
-        if isinstance(conn, sqlite3.Connection):
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL UNIQUE,
-                username TEXT,
-                full_name TEXT,
-                books TEXT,
-                started BOOLEAN DEFAULT FALSE
-            )
-            ''')
-        else:
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER NOT NULL UNIQUE,
-                username TEXT,
-                full_name TEXT,
-                books TEXT,
-                started BOOLEAN DEFAULT FALSE
-            )
-            ''')
-
-        conn.commit()
+        # Создаем таблицы, если их нет
+        metadata.create_all(engine)
         logger.info("База данных успешно инициализирована")
     except Exception as e:
         logger.error(f"Ошибка при инициализации базы данных: {e}")
