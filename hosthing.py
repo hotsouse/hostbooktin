@@ -30,7 +30,7 @@ database_url = os.getenv("DATABASE_URL")
 
 # Если `DATABASE_URL` пустой, используем SQLite по умолчанию
 if not database_url:
-    database_url = "sqlite:///users_books.db"
+    database_url = "sqlite:///tmp/users_books.db"
 
 # Если используется SQLite, убедимся в правильном формате
 if database_url.startswith("sqlite:////"):
