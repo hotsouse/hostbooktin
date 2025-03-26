@@ -15,6 +15,7 @@ from requests.exceptions import RequestException
 import backoff
 from sqlalchemy import create_engine, MetaData
 import sqlite3
+from database import db  # Импортируем db из database.py
 
 # Настройка логирования
 logging.basicConfig(
