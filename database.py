@@ -1,15 +1,15 @@
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 import os
+from sqlalchemy import create_engine, MetaData
+from sqlalchemy.orm import sessionmaker
 
 app = Flask(__name__)
 
-# Создаем каталог "mp", если он не существует
-os.makedirs("mp", exist_ok=True)
-
-# Настройка URI для базы данных
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", "sqlite:///data/users_books.db")
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False  # Отключаем отслеживание изменений
+# Настройка URI для базы данных PostgreSQL
+DATABASE_URL = "postgresql://postgres:[YOUR-PASSWORD]@db.krtkebdtxypgczlamacx.supabase.co:5432/postgres"
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", DATABASE_URL)
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
@@ -22,6 +22,19 @@ class User(db.Model):
     books = db.Column(db.Text)
     started = db.Column(db.Boolean, default=False)
 
+# Создание движка базы данных PostgreSQL
+engine = create_engine(DATABASE_URL)
+Session = sessionmaker(bind=engine)
+session = Session()
+
+# Создание метаданных
+metadata = MetaData()
+
 # Создаем таблицы, если их нет
 with app.app_context():
-    db.create_all()
+    try:
+        # Создаем таблицы в PostgreSQL
+        metadata.create_all(engine)
+        print("Таблицы успешно созданы в PostgreSQL")
+    except Exception as e:
+        print(f"Ошибка при создании таблиц: {e}")

@@ -7,7 +7,7 @@ services:
     volumes:
       - ./users_books.db:/tmp/users_books.db
     environment:
-      - DATABASE_URL=sqlite:////tmp/users_books.db
+      - DATABASE_URL=sqlite:////data/users_books.db
     ports:
       - "5050:5000"
 
