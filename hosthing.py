@@ -13,9 +13,8 @@ from dotenv import load_dotenv
 import requests
 from requests.exceptions import RequestException
 import backoff
-from sqlalchemy import create_engine, MetaData
 import sqlite3
-from database import db  # Импортируем db из database.py
+from database import db, app, User  # Импортируем необходимые компоненты из database.py
 
 # Настройка логирования
 logging.basicConfig(
@@ -28,47 +27,29 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Инициализация DATABASE_URL
-database_url = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Если `DATABASE_URL` пустой, создаем каталог и используем SQLite по умолчанию
-if not database_url:
+if not DATABASE_URL:
     os.makedirs("/data", exist_ok=True)  # Создаем каталог для базы данных
-    database_url = "sqlite:///data/users_books.db"
+    DATABASE_URL = "sqlite:///data/users_books.db"
 
 # Если используется SQLite, убедимся в правильном формате
-if database_url.startswith("sqlite:"):
-    database_url = f"sqlite:///{database_url.lstrip('sqlite:/')}"
+if DATABASE_URL.startswith("sqlite:"):
+    DATABASE_URL = f"sqlite:///{DATABASE_URL.lstrip('sqlite:/')}"
 
-print(f"Используемая DATABASE_URL: {database_url}")  # Debugging
+print(f"Используемая DATABASE_URL: {DATABASE_URL}")  # Debugging
 
-# Создание движка базы данных
-engine = create_engine(database_url)
-metadata = MetaData()
+# Инициализация бота
+TOKEN = os.getenv("TOKEN")
+bot = TeleBot(TOKEN)
 
-def get_env_var(var_name):
-    """Получение переменной окружения с проверкой"""
-    value = os.getenv(var_name)
-    if not value:
-        logger.error(f"Ошибка: Переменная окружения {var_name} не установлена")
-        if var_name == 'WEBHOOK_URL':
-            logger.error("WEBHOOK_URL должен быть установлен в настройках Render")
-        elif var_name == 'TOKEN':
-            logger.error("Получите токен у @BotFather в Telegram")
-        raise EnvironmentError(f"Переменная окружения {var_name} не установлена")
-    return value
-
-
-# Инициализация переменных окружения
-TOKEN = get_env_var('TOKEN')
-WEBHOOK_URL = get_env_var('WEBHOOK_URL').rstrip(
-    '/')  # Удаляем trailing slash если есть
-DATABASE_URL = get_env_var('DATABASE_URL')
+# Создаем таблицы в базе данных
+with app.app_context():
+    db.create_all()
 
 # Создаем Flask приложение
 app = Flask(__name__)
-
-# Инициализация бота с parse_mode='HTML'
-bot = TeleBot(TOKEN, parse_mode='HTML')
 
 # Флаг для контроля работы бота
 is_running = True
