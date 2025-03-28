@@ -185,7 +185,17 @@ def init_database():
     """Инициализация базы данных"""
     try:
         # Создаем таблицы, если их нет
-        metadata.create_all(engine)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER UNIQUE,
+                username TEXT,
+                full_name TEXT,
+                books TEXT,
+                started BOOLEAN DEFAULT FALSE
+            )
+        """)
+        conn.commit()
         logger.info("База данных успешно инициализирована")
     except Exception as e:
         logger.error(f"Ошибка при инициализации базы данных: {e}")
@@ -221,14 +231,15 @@ def main_menu():
         types.KeyboardButton("Search"),
         types.KeyboardButton("FAQ"),
         types.KeyboardButton("Мои книги"),
-        types.KeyboardButton("Users")
+        types.KeyboardButton("Users"),
+        types.KeyboardButton("📋 Пройти опрос")
     )
     return markup
 
 
 # Список команд меню
 MENU_COMMANDS = ["Старт", "Зарегистрироваться", "Добавить книги", "Доступные книги",
-                 "Search", "FAQ", "Мои книги", "Users"]
+                 "Search", "FAQ", "Мои книги", "Users", "📋 Пройти опрос"]
 
 # Обработчик всех сообщений
 
@@ -270,6 +281,9 @@ def handle_messages(message):
             return
         elif message.text == "Users":
             users_message(message)
+            return
+        elif message.text == "📋 Пройти опрос":
+            send_survey(message)
             return
 
     # Обработка сообщений в зависимости от состояния пользователя
@@ -336,13 +350,20 @@ def register_user(message):
         conn = get_db()
         with conn:
             cursor = conn.cursor()
+            # Проверяем, существует ли пользователь
             cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
             if cursor.fetchone():
                 bot.send_message(
-                    message.chat.id, "Регистрация завершена! Теперь можете добавить свои книги для обмена нажимая 'Добавить книги'.", reply_markup=main_menu())
+                    message.chat.id, 
+                    "Регистрация завершена! Теперь можете добавить свои книги для обмена нажимая 'Добавить книги'.", 
+                    reply_markup=main_menu()
+                )
             else:
-                cursor.execute('INSERT INTO users (user_id, username, full_name, books) VALUES (?, ?, ?, ?)',
-                               (user_id, username, full_name, ""))
+                # Сохраняем данные в базу с использованием INSERT OR IGNORE
+                cursor.execute(
+                    'INSERT OR IGNORE INTO users (user_id, username, full_name, books) VALUES (?, ?, ?, ?)',
+                    (user_id, username, full_name, "")
+                )
                 conn.commit()
                 bot.send_message(
                     message.chat.id,
@@ -352,7 +373,10 @@ def register_user(message):
     except Exception as e:
         logger.error(f"Ошибка в register_user: {e}")
         bot.send_message(
-            message.chat.id, "Произошла ошибка при регистрации. Пожалуйста, попробуйте позже.", reply_markup=main_menu())
+            message.chat.id, 
+            "Произошла ошибка при регистрации. Пожалуйста, попробуйте позже.", 
+            reply_markup=main_menu()
+        )
     clear_user_state(user_id)
 
 # Обработка добавления книг после регистрации
@@ -545,6 +569,16 @@ def users_message(message):
     else:
         bot.send_message(
             message.chat.id, "У вас нет прав для доступа к этому меню.")
+
+# Обработчик нажатия на кнопку "📋 Пройти опрос"
+@bot.message_handler(func=lambda message: message.text == "📋 Пройти опрос")
+def send_survey(message):
+    survey_link = "https://forms.gle/eAkGmJf1iMNC845x9"  # Замени на свою ссылку
+    bot.send_message(
+        message.chat.id, 
+        f"Привет! Мы хотим улучшить наш бот, пройди, пожалуйста, опрос: {survey_link}",
+        reply_markup=main_menu()
+    )
 
 
 def set_webhook():
