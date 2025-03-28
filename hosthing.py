@@ -33,6 +33,8 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     os.makedirs("/data", exist_ok=True)  # Создаем каталог для базы данных
     DATABASE_URL = "sqlite:///data/users_books.db"
+elif DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 # Если используется SQLite, убедимся в правильном формате
 if DATABASE_URL.startswith("sqlite:"):
@@ -42,11 +44,18 @@ print(f"Используемая DATABASE_URL: {DATABASE_URL}")  # Debugging
 
 # Инициализация бота
 TOKEN = os.getenv("TOKEN")
+if not TOKEN:
+    raise ValueError("TOKEN environment variable is not set")
 bot = TeleBot(TOKEN)
 
 # Создаем таблицы в базе данных
 with app.app_context():
-    db.create_all()
+    try:
+        db.create_all()
+        logger.info("Database tables created successfully")
+    except Exception as e:
+        logger.error(f"Error creating database tables: {e}")
+        raise
 
 # Создаем Flask приложение
 app = Flask(__name__)
