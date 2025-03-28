@@ -2,27 +2,29 @@ from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 import os
 from dotenv import load_dotenv
+import logging
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Загрузка переменных окружения
 load_dotenv()
 
 app = Flask(__name__)
 
-# Настройка URI для базы данных PostgreSQL
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    DATABASE_URL = "postgresql://postgres:covdeP-higtup-mimgi7@db.krtkebdtxypgczlamacx.supabase.co:5432/postgres"
-
-# Если URL начинается с postgres://, заменяем на postgresql://
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
-# Удаляем префикс DATABASE_URL= если он есть
-if DATABASE_URL.startswith("DATABASE_URL="):
-    DATABASE_URL = DATABASE_URL.replace("DATABASE_URL=", "")
-
+# Настройка URI для базы данных PostgreSQL с использованием Transaction Pooler
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres.krtkebdtxypgczlamacx:covdeP-higtup-mimgi7@aws-0-eu-central-1.pooler.supabase.com:6543/postgres")
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_size': 10,
+    'pool_recycle': 3600,
+    'pool_pre_ping': True
+}
 
 db = SQLAlchemy(app)
 

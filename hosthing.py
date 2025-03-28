@@ -38,11 +38,18 @@ elif DATABASE_URL.startswith("postgres://"):
 elif DATABASE_URL.startswith("DATABASE_URL="):
     DATABASE_URL = DATABASE_URL.replace("DATABASE_URL=", "")
 
+# Удаляем квадратные скобки из пароля, если они есть
+if "[" in DATABASE_URL and "]" in DATABASE_URL:
+    start = DATABASE_URL.find("[")
+    end = DATABASE_URL.find("]")
+    password = DATABASE_URL[start+1:end]
+    DATABASE_URL = DATABASE_URL[:start] + password + DATABASE_URL[end+1:]
+
 # Если используется SQLite, убедимся в правильном формате
 if DATABASE_URL.startswith("sqlite:"):
     DATABASE_URL = f"sqlite:///{DATABASE_URL.lstrip('sqlite:/')}"
 
-print(f"Используемая DATABASE_URL: {DATABASE_URL}")  # Debugging
+logger.info(f"Using DATABASE_URL: {DATABASE_URL}")  # Debugging
 
 # Инициализация бота
 TOKEN = os.getenv("TOKEN")
@@ -51,13 +58,27 @@ if not TOKEN:
 bot = TeleBot(TOKEN)
 
 # Создаем таблицы в базе данных
-with app.app_context():
-    try:
-        db.create_all()
-        logger.info("Database tables created successfully")
-    except Exception as e:
-        logger.error(f"Error creating database tables: {e}")
-        raise
+def init_db():
+    max_retries = 3
+    retry_delay = 5
+    
+    for attempt in range(max_retries):
+        try:
+            with app.app_context():
+                db.create_all()
+                logger.info("Database tables created successfully")
+                return
+        except Exception as e:
+            logger.error(f"Attempt {attempt + 1}/{max_retries} failed: {e}")
+            if attempt < max_retries - 1:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                logger.error("Failed to initialize database after all retries")
+                raise
+
+# Инициализируем базу данных
+init_db()
 
 # Создаем Flask приложение
 app = Flask(__name__)
