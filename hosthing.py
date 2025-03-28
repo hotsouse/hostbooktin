@@ -35,6 +35,8 @@ if not DATABASE_URL:
     DATABASE_URL = "sqlite:///data/users_books.db"
 elif DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+elif DATABASE_URL.startswith("DATABASE_URL="):
+    DATABASE_URL = DATABASE_URL.replace("DATABASE_URL=", "")
 
 # Если используется SQLite, убедимся в правильном формате
 if DATABASE_URL.startswith("sqlite:"):
