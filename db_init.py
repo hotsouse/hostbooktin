@@ -9,9 +9,8 @@ def init_db():
     if os.path.exists(DB_FILE):
         os.remove(DB_FILE)
     
-    # Создаем новое подключение
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
 
     # Создаем таблицу пользователей
     cursor.execute('''
