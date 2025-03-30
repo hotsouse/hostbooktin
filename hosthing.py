@@ -188,31 +188,58 @@ def setup_webhook_with_retry():
 
 def get_db():
     """Получение соединения с базой данных"""
-    if DATABASE_URL.startswith("sqlite:///"):
-        return sqlite3.connect(DATABASE_URL.replace("sqlite:///", ""))
-    else:
-        return psycopg2.connect(DATABASE_URL)
+    try:
+        if DATABASE_URL.startswith("sqlite:///"):
+            conn = sqlite3.connect(DATABASE_URL.replace("sqlite:///", ""))
+        else:
+            conn = psycopg2.connect(DATABASE_URL)
+        return conn
+    except Exception as e:
+        logger.error(f"Ошибка подключения к базе данных: {e}")
+        raise
 
 
 def init_database():
     """Инициализация базы данных"""
+    conn = None
+    cursor = None
     try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
         # Создаем таблицы, если их нет
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER UNIQUE,
-                username TEXT,
-                full_name TEXT,
-                books TEXT,
-                started BOOLEAN DEFAULT FALSE
-            )
-        """)
+        if DATABASE_URL.startswith("sqlite:///"):
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER UNIQUE,
+                    username TEXT,
+                    full_name TEXT,
+                    books TEXT,
+                    started BOOLEAN DEFAULT FALSE
+                )
+            """)
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER UNIQUE,
+                    username TEXT,
+                    full_name TEXT,
+                    books TEXT,
+                    started BOOLEAN DEFAULT FALSE
+                )
+            """)
         conn.commit()
         logger.info("База данных успешно инициализирована")
     except Exception as e:
         logger.error(f"Ошибка при инициализации базы данных: {e}")
         sys.exit(1)
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 
 # Словарь для хранения состояний пользователей
@@ -327,13 +354,18 @@ def start(message):
 @bot.message_handler(func=lambda message: message.text == "Старт")
 def handle_start_button(message):
     user_id = message.from_user.id
+    conn = None
+    cursor = None
     try:
         conn = get_db()
-        with conn:
-            cursor = conn.cursor()
+        cursor = conn.cursor()
+        if DATABASE_URL.startswith("sqlite:///"):
+            cursor.execute(
+                'UPDATE users SET started = TRUE WHERE user_id = ?', (user_id,))
+        else:
             cursor.execute(
                 'UPDATE users SET started = TRUE WHERE user_id = %s', (user_id,))
-            conn.commit()
+        conn.commit()
         bot.send_message(
             message.chat.id,
             "Добро пожаловать! Выберите 'Зарегистрироваться', чтобы начать обмен книгами.",
@@ -343,6 +375,11 @@ def handle_start_button(message):
         logger.error(f"Ошибка в handle_start_button: {e}")
         bot.send_message(
             message.chat.id, "Произошла ошибка. Пожалуйста, попробуйте позже.")
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # Обработка нажатия на кнопку "Зарегистрироваться"
 
@@ -358,31 +395,42 @@ def register_user(message):
     full_name = message.text
     user_id = message.from_user.id
     username = message.from_user.username
+    conn = None
+    cursor = None
 
     try:
         conn = get_db()
-        with conn:
-            cursor = conn.cursor()
-            # Проверяем, существует ли пользователь
+        cursor = conn.cursor()
+        # Проверяем, существует ли пользователь
+        if DATABASE_URL.startswith("sqlite:///"):
             cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-            if cursor.fetchone():
-                bot.send_message(
-                    message.chat.id, 
-                    "Регистрация завершена! Теперь можете добавить свои книги для обмена нажимая 'Добавить книги'.", 
-                    reply_markup=main_menu()
-                )
-            else:
-                # Сохраняем данные в базу с использованием INSERT OR IGNORE
+        else:
+            cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
+            
+        if cursor.fetchone():
+            bot.send_message(
+                message.chat.id, 
+                "Регистрация завершена! Теперь можете добавить свои книги для обмена нажимая 'Добавить книги'.", 
+                reply_markup=main_menu()
+            )
+        else:
+            # Сохраняем данные в базу
+            if DATABASE_URL.startswith("sqlite:///"):
                 cursor.execute(
                     'INSERT OR IGNORE INTO users (user_id, username, full_name, books) VALUES (?, ?, ?, ?)',
                     (user_id, username, full_name, "")
                 )
-                conn.commit()
-                bot.send_message(
-                    message.chat.id,
-                    "Регистрация завершена! Теперь отправьте список книг, которые вы хотите обменять.",
-                    reply_markup=main_menu()
+            else:
+                cursor.execute(
+                    'INSERT INTO users (user_id, username, full_name, books) VALUES (%s, %s, %s, %s) ON CONFLICT (user_id) DO NOTHING',
+                    (user_id, username, full_name, "")
                 )
+            conn.commit()
+            bot.send_message(
+                message.chat.id,
+                "Регистрация завершена! Теперь отправьте список книг, которые вы хотите обменять.",
+                reply_markup=main_menu()
+            )
     except Exception as e:
         logger.error(f"Ошибка в register_user: {e}")
         bot.send_message(
@@ -390,6 +438,11 @@ def register_user(message):
             "Произошла ошибка при регистрации. Пожалуйста, попробуйте позже.", 
             reply_markup=main_menu()
         )
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
     clear_user_state(user_id)
 
 # Обработка добавления книг после регистрации
@@ -403,29 +456,47 @@ def add_books(message):
 
     books = message.text
     user_id = message.from_user.id
+    conn = None
+    cursor = None
+    
     try:
         conn = get_db()
-        with conn:
-            cursor = conn.cursor()
+        cursor = conn.cursor()
+        if DATABASE_URL.startswith("sqlite:///"):
             cursor.execute(
                 'SELECT books FROM users WHERE user_id = ?', (user_id,))
-            result = cursor.fetchone()
-            if result:
-                current_books = result[0] or ""
-                updated_books = current_books + \
-                    (", " if current_books else "") + books
+        else:
+            cursor.execute(
+                'SELECT books FROM users WHERE user_id = %s', (user_id,))
+                
+        result = cursor.fetchone()
+        if result:
+            current_books = result[0] or ""
+            updated_books = current_books + \
+                (", " if current_books else "") + books
+            
+            if DATABASE_URL.startswith("sqlite:///"):
                 cursor.execute(
                     'UPDATE users SET books = ? WHERE user_id = ?', (updated_books, user_id))
-                conn.commit()
-                bot.send_message(
-                    message.chat.id, "Ваши книги успешно добавлены!", reply_markup=main_menu())
             else:
-                bot.send_message(
-                    message.chat.id, "Ошибка! Вы не зарегистрированы.", reply_markup=main_menu())
+                cursor.execute(
+                    'UPDATE users SET books = %s WHERE user_id = %s', (updated_books, user_id))
+                    
+            conn.commit()
+            bot.send_message(
+                message.chat.id, "Ваши книги успешно добавлены!", reply_markup=main_menu())
+        else:
+            bot.send_message(
+                message.chat.id, "Ошибка! Вы не зарегистрированы.", reply_markup=main_menu())
     except Exception as e:
         logger.error(f"Ошибка в add_books: {e}")
         bot.send_message(
             message.chat.id, "Произошла ошибка при добавлении книг. Пожалуйста, попробуйте позже.", reply_markup=main_menu())
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
     clear_user_state(user_id)
 
 # Функция: показать все доступные книги
@@ -433,13 +504,14 @@ def add_books(message):
 
 @bot.message_handler(func=lambda message: message.text == "Доступные книги")
 def available_books(message):
+    conn = None
+    cursor = None
     try:
         conn = get_db()
-        with conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                'SELECT username, books FROM users WHERE books IS NOT NULL AND books != \'\'')
-            results = cursor.fetchall()
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT username, books FROM users WHERE books IS NOT NULL AND books != \'\'')
+        results = cursor.fetchall()
 
         if results:
             # Формируем список книг с именами пользователей
@@ -466,6 +538,11 @@ def available_books(message):
         logger.error(f"Ошибка при получении списка книг: {e}")
         bot.send_message(
             message.chat.id, "Произошла ошибка при получении списка книг. Пожалуйста, попробуйте позже.")
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # Обработка нажатия на кнопку "Search"
 
@@ -484,16 +561,17 @@ def search_books(message):
         return
 
     book_name = message.text.lower()
+    conn = None
+    cursor = None
     try:
         conn = get_db()
-        with conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT full_name, username, books FROM users')
-            results = []
-            for row in cursor.fetchall():
-                full_name, username, books = row
-                if books and book_name in books.lower():
-                    results.append(f"{full_name} (@{username}): {books}")
+        cursor = conn.cursor()
+        cursor.execute('SELECT full_name, username, books FROM users')
+        results = []
+        for row in cursor.fetchall():
+            full_name, username, books = row
+            if books and book_name in books.lower():
+                results.append(f"{full_name} (@{username}): {books}")
         if results:
             bot.send_message(message.chat.id, "\n".join(
                 results), reply_markup=main_menu())
@@ -504,6 +582,11 @@ def search_books(message):
         logger.error(f"Ошибка в search_books: {e}")
         bot.send_message(
             message.chat.id, "Произошла ошибка при поиске. Пожалуйста, попробуйте позже.", reply_markup=main_menu())
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
     clear_user_state(message.from_user.id)
 
 # Обработка нажатия на кнопку "FAQ"
@@ -520,16 +603,31 @@ def faq_message(message):
 @bot.message_handler(func=lambda message: message.text == "Мои книги")
 def my_books(message):
     user_id = message.from_user.id
-    conn = get_db()
-    with conn:
+    conn = None
+    cursor = None
+    try:
+        conn = get_db()
         cursor = conn.cursor()
-        cursor.execute('SELECT books FROM users WHERE user_id = ?', (user_id,))
+        if DATABASE_URL.startswith("sqlite:///"):
+            cursor.execute('SELECT books FROM users WHERE user_id = ?', (user_id,))
+        else:
+            cursor.execute('SELECT books FROM users WHERE user_id = %s', (user_id,))
+            
         result = cursor.fetchone()
         if result and result[0]:
             bot.send_message(message.chat.id, f"Ваши книги:\n{result[0]}")
         else:
             bot.send_message(
                 message.chat.id, "У вас пока нет добавленных книг.")
+    except Exception as e:
+        logger.error(f"Ошибка при получении списка книг: {e}")
+        bot.send_message(
+            message.chat.id, "Произошла ошибка. Пожалуйста, попробуйте позже.")
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 # Обработка нажатия на кнопку "Users" (для админа)
 
@@ -538,47 +636,53 @@ def my_books(message):
 def users_message(message):
     # Проверка, является ли пользователь администратором
     if message.from_user.id == 1213579921:  # Замените на свой ID
+        conn = None
+        cursor = None
         try:
             conn = get_db()
-            with conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    'SELECT full_name, username, started FROM users')
-                users = cursor.fetchall()
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT full_name, username, started FROM users')
+            users = cursor.fetchall()
 
-                if users:
-                    registered_users = [
-                        f"{user[0]} (@{user[1]})" for user in users if not user[2]]
-                    started_users = [
-                        f"{user[0]} (@{user[1]})" for user in users if user[2]]
+            if users:
+                registered_users = [
+                    f"{user[0]} (@{user[1]})" for user in users if not user[2]]
+                started_users = [
+                    f"{user[0]} (@{user[1]})" for user in users if user[2]]
 
-                    # Общее количество пользователей
-                    total_users = len(users)
+                # Общее количество пользователей
+                total_users = len(users)
 
-                    # Формируем ответ
-                    response = f"Общее количество пользователей: {total_users}\n\n"
+                # Формируем ответ
+                response = f"Общее количество пользователей: {total_users}\n\n"
 
-                    # Список зарегистрированных пользователей
-                    response += f"Список пользователей, которые зарегистрировались:\n\n"
-                    if registered_users:
-                        response += "\n".join(registered_users) + "\n\n"
-                    else:
-                        response += "Нет зарегистрированных пользователей.\n\n"
-
-                    # Список пользователей, которые нажали на 'Старт'
-                    response += "Список пользователей, которые нажали на 'Старт':\n\n"
-                    if started_users:
-                        response += "\n".join(started_users)
-                    else:
-                        response += "Нет пользователей, которые нажали на 'Старт'."
-
-                    bot.send_message(message.chat.id, response)
+                # Список зарегистрированных пользователей
+                response += f"Список пользователей, которые зарегистрировались:\n\n"
+                if registered_users:
+                    response += "\n".join(registered_users) + "\n\n"
                 else:
-                    bot.send_message(message.chat.id, "Нет пользователей.")
+                    response += "Нет зарегистрированных пользователей.\n\n"
+
+                # Список пользователей, которые нажали на 'Старт'
+                response += "Список пользователей, которые нажали на 'Старт':\n\n"
+                if started_users:
+                    response += "\n".join(started_users)
+                else:
+                    response += "Нет пользователей, которые нажали на 'Старт'."
+
+                bot.send_message(message.chat.id, response)
+            else:
+                bot.send_message(message.chat.id, "Нет пользователей.")
         except Exception as e:
             logger.error(f"Ошибка при получении списка пользователей: {e}")
             bot.send_message(
                 message.chat.id, "Произошла ошибка при получении списка пользователей.")
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
     else:
         bot.send_message(
             message.chat.id, "У вас нет прав для доступа к этому меню.")
