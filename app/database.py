@@ -28,7 +28,7 @@ def fetch_users():
 # Example function to fetch users using psycopg2
 def fetch_users_psycopg2():
     conn = psycopg2.connect(DATABASE_URL)
-    cursor = conn.cursor()  # Create a cursor
+    cursor = conn.cursor()  # Create a cursor before using it
     cursor.execute("SELECT * FROM users")
     rows = cursor.fetchall()
     cursor.close()  # Close the cursor
