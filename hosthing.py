@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 # Загрузка переменных окружения
 load_dotenv()
+WEBHOOK_URL = os.getenv('WEBHOOK_URL') 
 
 # Инициализация DATABASE_URL
 DATABASE_URL = os.getenv("DATABASE_URL")

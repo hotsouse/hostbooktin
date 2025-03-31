@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 # Load environment variables from .env file
 load_dotenv()
 DATABASE_URL = os.getenv('DATABASE_URL')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # Load WEBHOOK_URL
 
 def initialize_database():
     try:
@@ -43,4 +44,10 @@ def fetch_users():
         return None
 
 # Call the initialize_database function to set up the database
-initialize_database() 
+initialize_database()
+
+# Example usage of WEBHOOK_URL (if needed)
+if WEBHOOK_URL:
+    logger.info(f"Using WEBHOOK_URL: {WEBHOOK_URL}")
+else:
+    logger.error("WEBHOOK_URL is not defined.") 
