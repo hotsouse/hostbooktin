@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 app = Flask(__name__)
 
 # Настройка URI для базы данных PostgreSQL
-DATABASE_URL = "postgresql://postgres.krtkebdtxypgczlamacx:covdeP-higtup-mimgi7@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
+DATABASE_URL = "postgresql://postgres.krtkebdtxypgczlamacx:covdeP-higtup-mimgi7@aws-0-eu-central-1.pooler.supabase.com:5432/postgres"
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", DATABASE_URL)
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 

@@ -7,7 +7,8 @@ services:
     volumes:
       - ./users_books.db:/tmp/users_books.db
     environment:
-      - DATABASE_URL=sqlite:////data/users_books.db
+      - DATABASE_URL=postgresql://postgres:covdeP-higtup-mimgi7%40@db.krtkebdtxypgczlamacx.supabase.co:5432/postgres
+
     ports:
       - "5050:5000"
 
