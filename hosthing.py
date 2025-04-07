@@ -403,18 +403,19 @@ if __name__ == "__main__":
     try:
         lock_file = acquire_lock()
         
-        # Создаем таблицы если их нет
         with app.app_context():
             db.create_all()
         
-        setup_webhook_with_retry()
-        
-        port = int(os.getenv('PORT', 10000))
-        if os.getenv('ENVIRONMENT') == 'production':
+        # Вариант 1: Для локальной разработки (polling)
+        if os.getenv('ENVIRONMENT') != 'production':
+            bot.remove_webhook()
+            bot.polling(none_stop=True, skip_pending=True)
+        # Вариант 2: Для продакшена (webhook)
+        else:
+            setup_webhook_with_retry()
             from waitress import serve
             serve(app, host="0.0.0.0", port=port)
-        else:
-            app.run(host='0.0.0.0', port=port, debug=True)
+            
     except Exception as e:
         logger.error(f"Ошибка запуска: {e}")
         cleanup()
