@@ -2,6 +2,8 @@ from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 import os
 from dotenv import load_dotenv
+from flask_migrate import Migrate
+
 
 load_dotenv()
 
@@ -12,6 +14,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql://postgres.krtkebdtxypgczlam
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
+migrate = Migrate(app, db) 
 
 class User(db.Model):
     __tablename__ = 'users'
@@ -29,12 +32,12 @@ class User(db.Model):
 class Exchange(db.Model):
     __tablename__ = 'exchanges'
     id = db.Column(db.Integer, primary_key=True)
-    from_user_id = db.Column(db.String(36), db.ForeignKey('users.user_id'))
-    to_user_id = db.Column(db.String(36), db.ForeignKey('users.user_id'))
+    from_user_id = db.Column(db.BigInteger, db.ForeignKey('users.user_id'))  # Изменили на BigInteger
+    to_user_id = db.Column(db.BigInteger, db.ForeignKey('users.user_id'))   # Изменили на BigInteger
     book_given = db.Column(db.String(100))
     book_received = db.Column(db.String(100))
     exchange_date = db.Column(db.DateTime)
-    status = db.Column(db.String(20))  # completed, pending, cancelled
+    status = db.Column(db.String(20))
 
 # Создаём таблицы при первом запуске
 with app.app_context():
