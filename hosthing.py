@@ -93,9 +93,11 @@ def home():
 def webhook():
     if request.headers.get('content-type') == 'application/json':
         json_update = request.get_json()
-        bot.process_new_updates([types.Update.de_json(json_update)])
+        updates = json_update if isinstance(json_update, list) else [json_update]
+        bot.process_new_updates([types.Update.de_json(u) for u in updates])
         return "OK", 200
     return "Bad Request", 400
+
 
 # Словарь для хранения состояний пользователей
 user_states = {}
@@ -310,7 +312,7 @@ def search_books(message):
 def faq_message(message):
     bot.send_message(
         message.chat.id,
-        "По вопросам обращайтесь к @admin",
+        "Если есть какие-то неполадки, свяжитесь с администратором. Telegram:  @microkosmoos",
         reply_markup=main_menu()
     )
 
@@ -399,22 +401,28 @@ def setup_webhook_with_retry():
     set_webhook()
 
 if __name__ == "__main__":
+    port = int(os.environ.get('PORT', 10000))  # Define port
     lock_file = None
     try:
         lock_file = acquire_lock()
         
         with app.app_context():
             db.create_all()
+            logger.info("✅ Таблицы успешно созданы/проверены")
         
-        # Вариант 1: Для локальной разработки (polling)
-        if os.getenv('ENVIRONMENT') != 'production':
+        # Local development (polling)
+        if not os.getenv('RENDER'):
             bot.remove_webhook()
+            logger.info("Running in development mode (polling)")
             bot.polling(none_stop=True, skip_pending=True)
-        # Вариант 2: Для продакшена (webhook)
+        # Production (webhook)
         else:
-            setup_webhook_with_retry()
+            logger.info(f"Starting server on port {port}")
+            # First start the server
             from waitress import serve
             serve(app, host="0.0.0.0", port=port)
+            # Then set webhook after server is running
+            setup_webhook_with_retry()
             
     except Exception as e:
         logger.error(f"Ошибка запуска: {e}")

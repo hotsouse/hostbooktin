@@ -15,10 +15,9 @@ db = SQLAlchemy(app)
 
 class User(db.Model):
     __tablename__ = 'users'
-    
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.BigInteger, unique=True)  # Измените на BigInteger
-    username = db.Column(db.String(50))
+    user_id = db.Column(db.BigInteger, unique=True)  # Changed to BigInteger
+    username = db.Column(db.String(100))
     full_name = db.Column(db.String(100))
     books = db.Column(db.Text)
     started = db.Column(db.Boolean, default=False)

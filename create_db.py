@@ -17,13 +17,24 @@ db = SQLAlchemy(app)
 # Определение модели таблицы
 class User(db.Model):
     __tablename__ = 'users'
-    
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.BigInteger, unique=True)  # Измените на BigInteger
-    username = db.Column(db.String(50))
+    user_id = db.Column(db.BigInteger, unique=True)  # Changed to BigInteger
+    username = db.Column(db.String(100))
     full_name = db.Column(db.String(100))
     books = db.Column(db.Text)
     started = db.Column(db.Boolean, default=False)
+    
+# database.py
+class Exchange(db.Model):
+    __tablename__ = 'exchanges'
+    id = db.Column(db.Integer, primary_key=True)
+    from_user_id = db.Column(db.String(36), db.ForeignKey('users.user_id'))
+    to_user_id = db.Column(db.String(36), db.ForeignKey('users.user_id'))
+    book_given = db.Column(db.String(100))
+    book_received = db.Column(db.String(100))
+    exchange_date = db.Column(db.DateTime)
+    status = db.Column(db.String(20))  # completed, pending, cancelled
+    
 # Создание движка базы данных
 engine = create_engine(DATABASE_URL)
 Session = sessionmaker(bind=engine)
