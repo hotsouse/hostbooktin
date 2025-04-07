@@ -28,12 +28,12 @@ class User(db.Model):
 class Exchange(db.Model):
     __tablename__ = 'exchanges'
     id = db.Column(db.Integer, primary_key=True)
-    from_user_id = db.Column(db.String(36), db.ForeignKey('users.user_id'))
-    to_user_id = db.Column(db.String(36), db.ForeignKey('users.user_id'))
+    from_user_id = db.Column(db.BigInteger, db.ForeignKey('users.user_id'))  # Изменили на BigInteger
+    to_user_id = db.Column(db.BigInteger, db.ForeignKey('users.user_id'))   # Изменили на BigInteger
     book_given = db.Column(db.String(100))
     book_received = db.Column(db.String(100))
     exchange_date = db.Column(db.DateTime)
-    status = db.Column(db.String(20))  # completed, pending, cancelled
+    status = db.Column(db.String(20))
     
 # Создание движка базы данных
 engine = create_engine(DATABASE_URL)
