@@ -89,12 +89,15 @@ signal.signal(signal.SIGTERM, signal_handler)
 def index():
     return 'Book Crossing Bot is running!'
 
-@app.route('/' + TOKEN, methods=['POST'])
+@app.route('/webhook/' + TOKEN, methods=['POST'])  # Изменён путь
 def webhook():
-    json_string = request.get_data().decode('utf-8')
-    update = types.Update.de_json(json_string)
-    bot.process_new_updates([update])
-    return '!', 200
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return '', 200
+    return 'Bad Request', 400
+
 
 
 
@@ -400,8 +403,9 @@ def setup_webhook_with_retry():
     set_webhook()
 
 if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 10000))  # Define port
+    port = int(os.environ.get('PORT', 10000))
     lock_file = None
+    
     try:
         lock_file = acquire_lock()
         
@@ -409,30 +413,32 @@ if __name__ == "__main__":
             db.create_all()
             logger.info("✅ Таблицы успешно созданы/проверены")
         
-        # Local development (polling)
-        if not os.getenv('RENDER'):
-            bot.remove_webhook()
-            logger.info("Running in development mode (polling)")
-            bot.polling(none_stop=True, skip_pending=True)
+        webhook_url = os.getenv('WEBHOOK_URL')
         
         # Production (webhook)
-        else:
+        if webhook_url:
             logger.info("Running in production mode (webhook)")
-
-            # УДАЛЯЕМ И СТАВИМ ВЕБХУК ПЕРЕД ЗАПУСКОМ СЕРВЕРА
+            
+            # Удаляем старый вебхук
             bot.remove_webhook()
             time.sleep(1)
-            webhook_url = os.getenv('WEBHOOK_URL')
-            if not webhook_url:
-                raise ValueError("WEBHOOK_URL environment variable is not set")
-            bot.set_webhook(url=webhook_url + TOKEN)
-            logger.info(f"Webhook set to {webhook_url + TOKEN}")
-
-            # Потом только запускаем сервер
+            
+            # Устанавливаем новый
+            full_webhook_url = f"{webhook_url}/webhook/{TOKEN}"  # Добавлен /webhook
+            bot.set_webhook(url=full_webhook_url)
+            logger.info(f"Webhook set to {full_webhook_url}")
+            
+            # Запускаем сервер
             from waitress import serve
             serve(app, host="0.0.0.0", port=port)
+        
+        # Local development (polling)
+        else:
+            logger.info("Running in development mode (polling)")
+            bot.remove_webhook()
+            bot.polling(none_stop=True, skip_pending=True)
             
     except Exception as e:
-        logger.error(f"Ошибка запуска: {e}")
+        logger.error(f"Ошибка запуска: {e}", exc_info=True)
         cleanup()
         sys.exit(1)
