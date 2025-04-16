@@ -86,17 +86,16 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 @app.route('/')
-def home():
-    return "Book Crossing Bot is running!"
+def index():
+    return 'Book Crossing Bot is running!'
 
-@app.route(f'/{TOKEN}', methods=['POST'])
+@app.route('/' + TOKEN, methods=['POST'])
 def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        json_update = request.get_json()
-        updates = json_update if isinstance(json_update, list) else [json_update]
-        bot.process_new_updates([types.Update.de_json(u) for u in updates])
-        return "OK", 200
-    return "Bad Request", 400
+    json_string = request.get_data().decode('utf-8')
+    update = types.Update.de_json(json_string)
+    bot.process_new_updates([update])
+    return '!', 200
+
 
 
 # Словарь для хранения состояний пользователей
@@ -415,14 +414,23 @@ if __name__ == "__main__":
             bot.remove_webhook()
             logger.info("Running in development mode (polling)")
             bot.polling(none_stop=True, skip_pending=True)
+        
         # Production (webhook)
         else:
-            logger.info(f"Starting server on port {port}")
-            # First start the server
+            logger.info("Running in production mode (webhook)")
+
+            # УДАЛЯЕМ И СТАВИМ ВЕБХУК ПЕРЕД ЗАПУСКОМ СЕРВЕРА
+            bot.remove_webhook()
+            time.sleep(1)
+            webhook_url = os.getenv('WEBHOOK_URL')
+            if not webhook_url:
+                raise ValueError("WEBHOOK_URL environment variable is not set")
+            bot.set_webhook(url=webhook_url + TOKEN)
+            logger.info(f"Webhook set to {webhook_url + TOKEN}")
+
+            # Потом только запускаем сервер
             from waitress import serve
             serve(app, host="0.0.0.0", port=port)
-            # Then set webhook after server is running
-            setup_webhook_with_retry()
             
     except Exception as e:
         logger.error(f"Ошибка запуска: {e}")
