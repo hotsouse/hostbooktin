@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 import requests
 from requests.exceptions import RequestException
 import backoff
-from database import db, app, User  # Импортируем SQLAlchemy компоненты
+from database import db, app, User
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Настройка логирования
@@ -24,10 +24,14 @@ logger = logging.getLogger(__name__)
 
 # Загрузка переменных окружения
 load_dotenv()
-WEBHOOK_URL = os.getenv('WEBHOOK_URL')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL').rstrip('/') if os.getenv('WEBHOOK_URL') else None
 TOKEN = os.getenv("TOKEN")
+SECRET_TOKEN = os.getenv("SECRET_TOKEN")  # Добавляем секретный токен для вебхука
+
 if not TOKEN:
     raise ValueError("TOKEN environment variable is not set")
+if WEBHOOK_URL and not SECRET_TOKEN:
+    raise ValueError("SECRET_TOKEN environment variable is required for webhook mode")
 
 # Инициализация бота
 bot = TeleBot(TOKEN)
@@ -89,17 +93,11 @@ signal.signal(signal.SIGTERM, signal_handler)
 def index():
     return 'Book Crossing Bot is running!'
 
-@app.route('/webhook/' + TOKEN, methods=['POST'])  # Изменён путь
-def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return '', 200
-    return 'Bad Request', 400
 
-
-
+@app.route('/ping')
+def ping():
+    """Эндпоинт для поддержания активности сервера на Render"""
+    return "pong", 200
 
 # Словарь для хранения состояний пользователей
 user_states = {}
@@ -132,19 +130,23 @@ MENU_COMMANDS = [
 
 @bot.message_handler(func=lambda message: True)
 def handle_messages(message):
-    user_id = message.from_user.id
-    current_state = get_user_state(user_id)
+    try:
+        user_id = message.from_user.id
+        current_state = get_user_state(user_id)
 
-    if message.text in MENU_COMMANDS:
-        handle_menu_command(message)
-    elif current_state == "searching":
-        search_books(message)
-    elif current_state == "adding_books":
-        add_books(message)
-    elif current_state == "registering":
-        register_user(message)
-    else:
-        bot.send_message(message.chat.id, "Выберите действие из меню:", reply_markup=main_menu())
+        if message.text in MENU_COMMANDS:
+            handle_menu_command(message)
+        elif current_state == "searching":
+            search_books(message)
+        elif current_state == "adding_books":
+            add_books(message)
+        elif current_state == "registering":
+            register_user(message)
+        else:
+            bot.send_message(message.chat.id, "Выберите действие из меню:", reply_markup=main_menu())
+    except Exception as e:
+        logger.error(f"Ошибка в handle_messages: {e}")
+        bot.send_message(message.chat.id, "⚠️ Произошла ошибка. Попробуйте еще раз.")
 
 def handle_menu_command(message):
     command_handlers = {
@@ -158,105 +160,130 @@ def handle_menu_command(message):
         "Users": lambda: users_message(message),
         "📋 Пройти опрос": lambda: send_survey(message)
     }
-    command_handlers.get(message.text, lambda: None)()
+    handler = command_handlers.get(message.text, lambda: None)
+    try:
+        handler()
+    except Exception as e:
+        logger.error(f"Ошибка обработки команды {message.text}: {e}")
+        bot.send_message(message.chat.id, "⚠️ Произошла ошибка при обработке команды.")
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.send_message(
-        message.chat.id,
-        "Добро пожаловать в Book Crossing!",
-        reply_markup=main_menu()
-    )
-
-def handle_start_button(message):
-    user_id = message.from_user.id
-    with app.app_context():
-        user = User.query.filter_by(user_id=user_id).first()
-        if user:
-            user.started = True
-            db.session.commit()
+    try:
         bot.send_message(
             message.chat.id,
-            "Добро пожаловать! Выберите 'Зарегистрироваться', чтобы начать.",
+            "Добро пожаловать в Book Crossing!",
             reply_markup=main_menu()
         )
+    except Exception as e:
+        logger.error(f"Ошибка в команде /start: {e}")
+
+def handle_start_button(message):
+    try:
+        user_id = message.from_user.id
+        with app.app_context():
+            user = User.query.filter_by(user_id=user_id).first()
+            if user:
+                user.started = True
+                db.session.commit()
+            bot.send_message(
+                message.chat.id,
+                "Добро пожаловать! Выберите 'Зарегистрироваться', чтобы начать.",
+                reply_markup=main_menu()
+            )
+    except Exception as e:
+        logger.error(f"Ошибка в handle_start_button: {e}")
+        bot.send_message(message.chat.id, "⚠️ Произошла ошибка при обработке.")
 
 def register_message(message):
-    set_user_state(message.from_user.id, "registering")
-    bot.send_message(
-        message.chat.id,
-        "Пожалуйста, напишите свое полное имя для регистрации.",
-        reply_markup=main_menu()
-    )
+    try:
+        set_user_state(message.from_user.id, "registering")
+        bot.send_message(
+            message.chat.id,
+            "Пожалуйста, напишите свое полное имя для регистрации.",
+            reply_markup=main_menu()
+        )
+    except Exception as e:
+        logger.error(f"Ошибка в register_message: {e}")
 
 def register_user(message):
-    user_id = message.from_user.id
-    username = message.from_user.username
-    full_name = message.text
-    
-    with app.app_context():
-        user = User.query.filter_by(user_id=user_id).first()
-        if user:
-            bot.send_message(
-                message.chat.id,
-                "Вы уже зарегистрированы!",
-                reply_markup=main_menu()
-            )
-        else:
-            new_user = User(
-                user_id=user_id,
-                username=username,
-                full_name=full_name,
-                books="",
-                started=False
-            )
-            db.session.add(new_user)
-            db.session.commit()
-            bot.send_message(
-                message.chat.id,
-                "Регистрация завершена! Теперь можете добавить книги.",
-                reply_markup=main_menu()
-            )
-    clear_user_state(user_id)
+    try:
+        user_id = message.from_user.id
+        username = message.from_user.username
+        full_name = message.text
+        
+        with app.app_context():
+            user = User.query.filter_by(user_id=user_id).first()
+            if user:
+                bot.send_message(
+                    message.chat.id,
+                    "Вы уже зарегистрированы!",
+                    reply_markup=main_menu()
+                )
+            else:
+                new_user = User(
+                    user_id=user_id,
+                    username=username,
+                    full_name=full_name,
+                    books="",
+                    started=False
+                )
+                db.session.add(new_user)
+                db.session.commit()
+                bot.send_message(
+                    message.chat.id,
+                    "Регистрация завершена! Теперь можете добавить книги.",
+                    reply_markup=main_menu()
+                )
+        clear_user_state(user_id)
+    except Exception as e:
+        logger.error(f"Ошибка в register_user: {e}")
+        bot.send_message(message.chat.id, "⚠️ Произошла ошибка при регистрации.")
 
 def add_books_message(message):
-    set_user_state(message.from_user.id, "adding_books")
-    bot.send_message(
-        message.chat.id,
-        "Отправьте список книг через запятую.",
-        reply_markup=main_menu()
-    )
+    try:
+        set_user_state(message.from_user.id, "adding_books")
+        bot.send_message(
+            message.chat.id,
+            "Отправьте список книг через запятую.",
+            reply_markup=main_menu()
+        )
+    except Exception as e:
+        logger.error(f"Ошибка в add_books_message: {e}")
 
 def add_books(message):
-    user_id = message.from_user.id
-    books = message.text
-    
-    with app.app_context():
-        user = User.query.filter_by(user_id=user_id).first()
-        if user:
-            if user.books:
-                user.books += f", {books}"
+    try:
+        user_id = message.from_user.id
+        books = message.text
+        
+        with app.app_context():
+            user = User.query.filter_by(user_id=user_id).first()
+            if user:
+                if user.books:
+                    user.books += f", {books}"
+                else:
+                    user.books = books
+                db.session.commit()
+                bot.send_message(
+                    message.chat.id,
+                    "Книги успешно добавлены!",
+                    reply_markup=main_menu()
+                )
             else:
-                user.books = books
-            db.session.commit()
-            bot.send_message(
-                message.chat.id,
-                "Книги успешно добавлены!",
-                reply_markup=main_menu()
-            )
-        else:
-            bot.send_message(
-                message.chat.id,
-                "Сначала зарегистрируйтесь!",
-                reply_markup=main_menu()
-            )
-    clear_user_state(user_id)
+                bot.send_message(
+                    message.chat.id,
+                    "Сначала зарегистрируйтесь!",
+                    reply_markup=main_menu()
+                )
+        clear_user_state(user_id)
+    except Exception as e:
+        logger.error(f"Ошибка в add_books: {e}")
+        bot.send_message(message.chat.id, "⚠️ Произошла ошибка при добавлении книг.")
 
 @bot.message_handler(func=lambda message: message.text == "Доступные книги")
 def available_books(message):
-    with app.app_context():
-        try:
-            # Получаем только пользователей с книгами
+    try:
+        with app.app_context():
             users_with_books = User.query.filter(
                 User.books.isnot(None),
                 User.books != '',
@@ -271,86 +298,97 @@ def available_books(message):
                 username = f"@{user.username}" if user.username else user.full_name
                 response += f"👤 {username}:\n{user.books}\n\n"
             
-            # Отправляем частями если сообщение слишком длинное
             for i in range(0, len(response), 4096):
                 bot.send_message(message.chat.id, response[i:i+4096])
                 
-        except Exception as e:
-            logger.error(f"Ошибка при получении книг: {str(e)}")
-            bot.send_message(message.chat.id, "⚠️ Произошла ошибка при загрузке списка книг.")
+    except Exception as e:
+        logger.error(f"Ошибка в available_books: {e}")
+        bot.send_message(message.chat.id, "⚠️ Произошла ошибка при загрузке списка книг.")
             
 def search_message(message):
-    set_user_state(message.from_user.id, "searching")
-    bot.send_message(
-        message.chat.id,
-        "Введите название книги для поиска:",
-        reply_markup=main_menu()
-    )
+    try:
+        set_user_state(message.from_user.id, "searching")
+        bot.send_message(
+            message.chat.id,
+            "Введите название книги для поиска:",
+            reply_markup=main_menu()
+        )
+    except Exception as e:
+        logger.error(f"Ошибка в search_message: {e}")
 
 def search_books(message):
-    search_term = message.text.lower()
-    with app.app_context():
-        users = User.query.filter(User.books.ilike(f'%{search_term}%')).all()
-        
-        if users:
-            results = []
-            for user in users:
-                if user.username != 'None':
-                    results.append(f"@{user.username}: {user.books}")
+    try:
+        search_term = message.text.lower()
+        with app.app_context():
+            users = User.query.filter(User.books.ilike(f'%{search_term}%')).all()
             
-            bot.send_message(
-                message.chat.id,
-                "Найдены книги:\n\n" + "\n\n".join(results),
-                reply_markup=main_menu()
-            )
-        else:
-            bot.send_message(
-                message.chat.id,
-                "Книги не найдены.",
-                reply_markup=main_menu()
-            )
-    clear_user_state(message.from_user.id)
+            if users:
+                results = []
+                for user in users:
+                    if user.username != 'None':
+                        results.append(f"@{user.username}: {user.books}")
+                
+                bot.send_message(
+                    message.chat.id,
+                    "Найдены книги:\n\n" + "\n\n".join(results),
+                    reply_markup=main_menu()
+                )
+            else:
+                bot.send_message(
+                    message.chat.id,
+                    "Книги не найдены.",
+                    reply_markup=main_menu()
+                )
+        clear_user_state(message.from_user.id)
+    except Exception as e:
+        logger.error(f"Ошибка в search_books: {e}")
+        bot.send_message(message.chat.id, "⚠️ Произошла ошибка при поиске.")
 
 def faq_message(message):
-    bot.send_message(
-        message.chat.id,
-        "Если есть какие-то неполадки, свяжитесь с администратором. Telegram:  @microkosmoos",
-        reply_markup=main_menu()
-    )
+    try:
+        bot.send_message(
+            message.chat.id,
+            "Если есть какие-то неполадки, свяжитесь с администратором. Telegram: @microkosmoos",
+            reply_markup=main_menu()
+        )
+    except Exception as e:
+        logger.error(f"Ошибка в faq_message: {e}")
 
 def my_books(message):
-    user_id = message.from_user.id
-    with app.app_context():
-        user = User.query.filter_by(user_id=user_id).first()
-        if user and user.books:
-            bot.send_message(
-                message.chat.id,
-                f"Ваши книги:\n{user.books}",
-                reply_markup=main_menu()
-            )
-        else:
-            bot.send_message(
-                message.chat.id,
-                "У вас пока нет книг.",
-                reply_markup=main_menu()
-            )
+    try:
+        user_id = message.from_user.id
+        with app.app_context():
+            user = User.query.filter_by(user_id=user_id).first()
+            if user and user.books:
+                bot.send_message(
+                    message.chat.id,
+                    f"Ваши книги:\n{user.books}",
+                    reply_markup=main_menu()
+                )
+            else:
+                bot.send_message(
+                    message.chat.id,
+                    "У вас пока нет книг.",
+                    reply_markup=main_menu()
+                )
+    except Exception as e:
+        logger.error(f"Ошибка в my_books: {e}")
+        bot.send_message(message.chat.id, "⚠️ Произошла ошибка при загрузке ваших книг.")
 
 @bot.message_handler(func=lambda message: message.text == "Users")
 def users_message(message):
-    ADMIN_ID = 1213579921  # Замените на ваш ID
-    
-    if message.from_user.id != ADMIN_ID:
-        return bot.send_message(message.chat.id, "⛔ У вас нет прав для просмотра этой информации.")
+    try:
+        ADMIN_ID = 1213579921
+        
+        if message.from_user.id != ADMIN_ID:
+            return bot.send_message(message.chat.id, "⛔ У вас нет прав для просмотра этой информации.")
 
-    with app.app_context():
-        try:
-            # Получаем всех пользователей
+        with app.app_context():
             all_users = User.query.order_by(User.id).all()
             
             if not all_users:
                 return bot.send_message(message.chat.id, "В базе данных пока нет пользователей.")
             
-            # Разделяем на зарегистрированных и активных
             registered = [u for u in all_users if u.full_name and not u.started]
             active = [u for u in all_users if u.started]
             
@@ -359,39 +397,64 @@ def users_message(message):
                 f"🆕 Зарегистрировались ({len(registered)}):\n"
             )
             
-            # Добавляем информацию о зарегистрированных
-            for user in registered[:10]:  # Ограничиваем первые 10
+            for user in registered[:10]:
                 name = f"@{user.username}" if user.username else user.full_name
                 response += f"• {name}\n"
             
             response += f"\n🚀 Нажали Старт ({len(active)}):\n"
             
-            # Добавляем информацию об активных
-            for user in active[:10]:  # Ограничиваем первые 10
+            for user in active[:10]:
                 name = f"@{user.username}" if user.username else user.full_name
                 book_count = len(user.books.split(',')) if user.books else 0
                 response += f"• {name} ({book_count} книг)\n"
             
-            # Отправляем частями
             for i in range(0, len(response), 4096):
                 bot.send_message(message.chat.id, response[i:i+4096])
                 
-        except Exception as e:
-            logger.error(f"Ошибка при получении пользователей: {str(e)}")
-            bot.send_message(message.chat.id, "⚠️ Произошла ошибка при загрузке данных.")
+    except Exception as e:
+        logger.error(f"Ошибка в users_message: {e}")
+        bot.send_message(message.chat.id, "⚠️ Произошла ошибка при загрузке данных.")
 
 def send_survey(message):
-    bot.send_message(
-        message.chat.id,
-        "Опрос: https://forms.gle/example",
-        reply_markup=main_menu()
-    )
+    try:
+        bot.send_message(
+            message.chat.id,
+            "Опрос: https://forms.gle/example",
+            reply_markup=main_menu()
+        )
+    except Exception as e:
+        logger.error(f"Ошибка в send_survey: {e}")
 
-def set_webhook():
-    url = f"https://api.telegram.org/bot{TOKEN}/setWebhook"
-    data = {"url": f"{WEBHOOK_URL}/{TOKEN}"}
-    response = requests.post(url, json=data)
-    logger.info("Webhook response: %s", response.json())
+def setup_webhook():
+    try:
+        # Удаляем старый вебхук
+        bot.remove_webhook()
+        time.sleep(1)
+        
+        # Формируем URL вебхука
+        webhook_url = f"{WEBHOOK_URL}/webhook/bot_webhook"
+        
+        logger.info(f"Setting webhook to: {webhook_url}")
+        
+        # Устанавливаем вебхук с секретным токеном
+        result = bot.set_webhook(
+            url=webhook_url,
+            max_connections=40,
+            allowed_updates=["message", "callback_query"],
+            drop_pending_updates=True,
+            secret_token=SECRET_TOKEN
+        )
+        
+        # Проверяем результат
+        webhook_info = bot.get_webhook_info()
+        if webhook_info.url != webhook_url:
+            logger.error(f"Webhook URL mismatch! Set: {webhook_url}, Actual: {webhook_info.url}")
+            return False
+            
+        return True
+    except Exception as e:
+        logger.error(f"Webhook setup error: {e}")
+        return False
 
 @backoff.on_exception(
     backoff.expo,
@@ -400,45 +463,27 @@ def set_webhook():
     max_time=300
 )
 def setup_webhook_with_retry():
-    set_webhook()
+    return setup_webhook()
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 10000))
-    lock_file = None
     
-    try:
-        lock_file = acquire_lock()
-        
-        with app.app_context():
-            db.create_all()
-            logger.info("✅ Таблицы успешно созданы/проверены")
-        
-        webhook_url = os.getenv('WEBHOOK_URL')
-        
-        # Production (webhook)
-        if webhook_url:
-            logger.info("Running in production mode (webhook)")
-            
-            # Удаляем старый вебхук
-            bot.remove_webhook()
-            time.sleep(1)
-            
-            # Устанавливаем новый
-            full_webhook_url = f"{webhook_url}/webhook/{TOKEN}"  # Добавлен /webhook
-            bot.set_webhook(url=full_webhook_url)
-            logger.info(f"Webhook set to {full_webhook_url}")
-            
-            # Запускаем сервер
-            from waitress import serve
-            serve(app, host="0.0.0.0", port=port)
-        
-        # Local development (polling)
-        else:
-            logger.info("Running in development mode (polling)")
-            bot.remove_webhook()
-            bot.polling(none_stop=True, skip_pending=True)
-            
-    except Exception as e:
-        logger.error(f"Ошибка запуска: {e}", exc_info=True)
-        cleanup()
-        sys.exit(1)
+    # Инициализация БД
+    with app.app_context():
+        db.create_all()
+        logger.info("✅ Таблицы созданы")
+
+    # Упрощенный запуск (без Thread)
+    logger.info(f"Запуск сервера на порту {port}")
+    
+    def run_polling():
+        logger.info("Polling mode activated")
+        while True:
+            try:
+                bot.polling(none_stop=True, timeout=30)
+            except Exception as e:
+                logger.error(f"Ошибка: {e}")
+                time.sleep(10)
+
+    # Один поток для всего
+    run_polling()  # Уберите Flask, если не нужен
