@@ -26,12 +26,18 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 WEBHOOK_URL = os.getenv('WEBHOOK_URL').rstrip('/') if os.getenv('WEBHOOK_URL') else None
 TOKEN = os.getenv("TOKEN")
-SECRET_TOKEN = os.getenv("SECRET_TOKEN")  # Добавляем секретный токен для вебхука
+SECRET_TOKEN = os.getenv("SECRET_TOKEN")
+RENDER = os.getenv("RENDER", "").lower() == "true"
 
+# Проверка обязательных переменных
 if not TOKEN:
-    raise ValueError("TOKEN environment variable is not set")
-if WEBHOOK_URL and not SECRET_TOKEN:
-    raise ValueError("SECRET_TOKEN environment variable is required for webhook mode")
+    raise ValueError("Токен бота не установлен! Проверьте переменную TOKEN")
+
+if RENDER and not WEBHOOK_URL:
+    raise ValueError("WEBHOOK_URL обязателен для работы на Render")
+
+if RENDER and not SECRET_TOKEN:
+    raise ValueError("SECRET_TOKEN обязателен для работы на Render")
 
 # Инициализация бота
 bot = TeleBot(TOKEN)
@@ -45,6 +51,21 @@ is_running = True
 # Блокировка для безопасного доступа
 db_lock = Lock()
 LOCK_FILE = "/tmp/telegram_bot.lock"
+
+# Словарь для хранения состояний пользователей
+user_states = {}
+
+def set_user_state(user_id, state):
+    """Установить состояние пользователя"""
+    user_states[user_id] = state
+
+def get_user_state(user_id):
+    """Получить состояние пользователя"""
+    return user_states.get(user_id)
+
+def clear_user_state(user_id):
+    """Очистить состояние пользователя"""
+    user_states.pop(user_id, None)
 
 def acquire_lock():
     """Получить блокировку процесса"""
@@ -93,23 +114,84 @@ signal.signal(signal.SIGTERM, signal_handler)
 def index():
     return 'Book Crossing Bot is running!'
 
-
 @app.route('/ping')
 def ping():
     """Эндпоинт для поддержания активности сервера на Render"""
     return "pong", 200
 
-# Словарь для хранения состояний пользователей
-user_states = {}
+@app.route('/webhook/bot_webhook', methods=['POST'])
+def bot_webhook():
+    """Обработчик вебхука для Telegram бота"""
+    if request.headers.get('X-Telegram-Bot-Api-Secret-Token') != SECRET_TOKEN:
+        return "Unauthorized", 403
+    
+    json_data = request.get_json()
+    update = types.Update.de_json(json_data)
+    bot.process_new_updates([update])
+    return "OK", 200
 
-def set_user_state(user_id, state):
-    user_states[user_id] = state
+def setup_webhook():
+    """Настройка вебхука с подробным логированием"""
+    try:
+        logger.info("Удаляем старый вебхук...")
+        bot.remove_webhook()
+        time.sleep(1)
 
-def get_user_state(user_id):
-    return user_states.get(user_id)
+        webhook_url = f"{WEBHOOK_URL}/webhook/bot_webhook"
+        logger.info(f"Пытаемся установить вебхук на: {webhook_url}")
 
-def clear_user_state(user_id):
-    user_states.pop(user_id, None)
+        result = bot.set_webhook(
+            url=webhook_url,
+            secret_token=SECRET_TOKEN,
+            max_connections=40,
+            allowed_updates=["message", "callback_query"],
+            drop_pending_updates=True
+        )
+        
+        time.sleep(2)
+        webhook_info = bot.get_webhook_info()
+        logger.info(f"Информация о вебхуке: {webhook_info}")
+
+        if webhook_info.url != webhook_url:
+            logger.error(f"URL вебхука не совпадает! Ожидалось: {webhook_url}, Получено: {webhook_info.url}")
+            return False
+            
+        logger.info("✅ Вебхук успешно установлен")
+        return True
+
+    except Exception as e:
+        logger.error(f"🚨 Ошибка при настройке вебхука: {str(e)}", exc_info=True)
+        return False
+
+@backoff.on_exception(
+    backoff.expo,
+    (RequestException, ConnectionError),
+    max_tries=5,
+    max_time=300
+)
+def setup_webhook_with_retry():
+    return setup_webhook()
+
+def run_webhook_server():
+    """Запуск Flask сервера для вебхука"""
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
+
+def run_polling():
+    """Режим polling для локальной разработки"""
+    logger.info("🚀 Запуск в режиме POLLING (локально)")
+    bot.remove_webhook()
+    bot.infinity_polling()
+
+def run_production():
+    """Режим вебхука для Render"""
+    logger.info("🌐 Запуск в режиме WEBHOOK (Render)")
+    if not setup_webhook_with_retry():
+        logger.error("Не удалось установить вебхук, переключаюсь на polling")
+        run_polling()
+        return
+    
+    run_webhook_server()
 
 # Главное меню
 def main_menu():
@@ -425,65 +507,19 @@ def send_survey(message):
     except Exception as e:
         logger.error(f"Ошибка в send_survey: {e}")
 
-def setup_webhook():
-    try:
-        # Удаляем старый вебхук
-        bot.remove_webhook()
-        time.sleep(1)
-        
-        # Формируем URL вебхука
-        webhook_url = f"{WEBHOOK_URL}/webhook/bot_webhook"
-        
-        logger.info(f"Setting webhook to: {webhook_url}")
-        
-        # Устанавливаем вебхук с секретным токеном
-        result = bot.set_webhook(
-            url=webhook_url,
-            max_connections=40,
-            allowed_updates=["message", "callback_query"],
-            drop_pending_updates=True,
-            secret_token=SECRET_TOKEN
-        )
-        
-        # Проверяем результат
-        webhook_info = bot.get_webhook_info()
-        if webhook_info.url != webhook_url:
-            logger.error(f"Webhook URL mismatch! Set: {webhook_url}, Actual: {webhook_info.url}")
-            return False
-            
-        return True
-    except Exception as e:
-        logger.error(f"Webhook setup error: {e}")
-        return False
-
-@backoff.on_exception(
-    backoff.expo,
-    (RequestException, ConnectionError),
-    max_tries=5,
-    max_time=300
-)
-def setup_webhook_with_retry():
-    return setup_webhook()
-
 if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 10000))
-    
     # Инициализация БД
     with app.app_context():
         db.create_all()
-        logger.info("✅ Таблицы созданы")
+        logger.info("✅ Таблицы созданы/проверены")
 
-    # Упрощенный запуск (без Thread)
-    logger.info(f"Запуск сервера на порту {port}")
-    
-    def run_polling():
-        logger.info("Polling mode activated")
-        while True:
-            try:
-                bot.polling(none_stop=True, timeout=30)
-            except Exception as e:
-                logger.error(f"Ошибка: {e}")
-                time.sleep(10)
-
-    # Один поток для всего
-    run_polling()  # Уберите Flask, если не нужен
+    try:
+        if RENDER:
+            logger.info("🌐 Обнаружена среда Render, запускаю в режиме WEBHOOK")
+            run_production()
+        else:
+            logger.info("💻 Локальный запуск, использую режим POLLING")
+            run_polling()
+    except Exception as e:
+        logger.critical(f"Критическая ошибка: {str(e)}")
+        sys.exit(1)
