@@ -55,6 +55,7 @@ LOCK_FILE = "/tmp/telegram_bot.lock"
 # Словарь для хранения состояний пользователей
 user_states = {}
 
+
 def set_user_state(user_id, state):
     """Установить состояние пользователя"""
     user_states[user_id] = state

@@ -37,3 +37,4 @@ waitress
 flask-migrate==3.1.0
 gunicorn
 
+gunicorn==20.1.0

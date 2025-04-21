@@ -2,8 +2,12 @@ services:
   - type: web
     name: hostbook-bot
     env: python
+    # Явно отключаем Docker (если файл есть в репозитории)
+    dockerfilePath: ""  # Пустая строка = игнорировать Dockerfile
+    
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn hosthing:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120 --access-logfile - --error-logfile - --log-level info
+    startCommand: gunicorn hosthing:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
+    
     envVars:
       - key: TOKEN
         sync: false
@@ -13,7 +17,7 @@ services:
         value: production
       - key: PYTHON_VERSION
         value: 3.9.18
-      - key: PORT
-        value: 10000
+      # PORT можно удалить (Render автоматически подставляет $PORT)
+    
     healthCheckPath: /
-    plan: free 
+    plan: free
