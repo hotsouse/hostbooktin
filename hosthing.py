@@ -189,7 +189,7 @@ def run_production():
     if not setup_webhook_with_retry():
         logger.error("Не удалось установить вебхук, переключаюсь на polling")
         run_polling()
-        return
+
     
     run_webhook_server()
 
@@ -507,19 +507,9 @@ def send_survey(message):
     except Exception as e:
         logger.error(f"Ошибка в send_survey: {e}")
 
-if __name__ == "__main__":
-    # Инициализация БД
-    with app.app_context():
-        db.create_all()
-        logger.info("✅ Таблицы созданы/проверены")
-
-    try:
-        if RENDER:
-            logger.info("🌐 Обнаружена среда Render, запускаю в режиме WEBHOOK")
-            run_production()
-        else:
-            logger.info("💻 Локальный запуск, использую режим POLLING")
-            run_polling()
-    except Exception as e:
-        logger.critical(f"Критическая ошибка: {str(e)}")
-        sys.exit(1)
+if __name__ == '__main__':
+    lock_file = acquire_lock()
+    if RENDER:
+        run_production()
+    else:
+        run_polling()

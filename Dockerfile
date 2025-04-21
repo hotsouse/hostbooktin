@@ -26,4 +26,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Используем exec form для правильной обработки сигналов
 ENTRYPOINT ["python"]
-CMD ["hosthing.py"] 
+CMD ["gunicorn", "hosthing:app"]

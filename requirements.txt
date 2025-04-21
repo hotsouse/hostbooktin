@@ -35,4 +35,5 @@ yarl==1.18.3
 backoff==2.2.1
 waitress
 flask-migrate==3.1.0
+gunicorn
 
